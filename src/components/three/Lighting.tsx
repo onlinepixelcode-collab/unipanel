@@ -10,11 +10,14 @@ import type { Mood } from "@/lib/studio/scheme";
  * (no external HDRI download). Each mood changes the softbox colour temperature,
  * the key light angle and the overall exposure; transitions are smoothed per frame.
  */
-export const MOODS: Record<Mood, { label: string; key: string; fill: string; keyIntensity: number; env: number; sun: [number, number, number]; bg: string; exposure: number }> = {
-  gallery: { label: "Gallery", key: "#ffffff", fill: "#f6f6f4", keyIntensity: 3, env: 1.05, sun: [2.2, 4.6, 4.2], bg: "#0e0e0d", exposure: 1.18 },
-  morning: { label: "Morning daylight", key: "#f2f6ff", fill: "#e8eef7", keyIntensity: 3.6, env: 1.1, sun: [4, 3.6, 3.2], bg: "#121417", exposure: 1.2 },
-  golden: { label: "Golden hour", key: "#ffd09a", fill: "#ffe4c6", keyIntensity: 3.6, env: 0.85, sun: [5, 2.2, 3], bg: "#15100b", exposure: 1.1 },
-  evening: { label: "Evening 2700K", key: "#ffbd7a", fill: "#ffdab0", keyIntensity: 1.6, env: 0.55, sun: [0.5, 2.6, 2.5], bg: "#0b0907", exposure: 1 },
+export const MOODS: Record<Mood, { label: string; key: string; fill: string; keyIntensity: number; env: number; hemi: number; sun: [number, number, number]; bg: string; exposure: number; night?: boolean }> = {
+  gallery: { label: "Gallery", key: "#ffffff", fill: "#f6f6f4", keyIntensity: 3, env: 1.05, hemi: 0.18, sun: [2.2, 4.6, 4.2], bg: "#0e0e0d", exposure: 1.18 },
+  // daylight: a stronger, lower sun with less fill so cast shadows read clearly
+  morning: { label: "Daylight", key: "#fff8ee", fill: "#e8eef7", keyIntensity: 4.6, env: 0.85, hemi: 0.1, sun: [4.2, 4.4, 3.4], bg: "#121417", exposure: 1.15 },
+  golden: { label: "Golden hour", key: "#ffc58a", fill: "#ffe4c6", keyIntensity: 4.2, env: 0.7, hemi: 0.1, sun: [5.5, 1.9, 2.6], bg: "#15100b", exposure: 1.1 },
+  evening: { label: "Evening 2700K", key: "#ffbd7a", fill: "#ffdab0", keyIntensity: 1.2, env: 0.4, hemi: 0.12, sun: [0.5, 2.6, 2.5], bg: "#0b0907", exposure: 1 },
+  // night: faint blue moonlight through the window; the room's own lights do the work
+  night: { label: "Night", key: "#8ea6d0", fill: "#5d6b85", keyIntensity: 0.28, env: 0.07, hemi: 0.04, sun: [5, 3.2, 1.6], bg: "#05070a", exposure: 1.05, night: true },
 };
 
 /**
@@ -51,6 +54,11 @@ export function Lighting({ mood, shadows, shadowMapSize = 2048, span = 6 }: { mo
       if (Math.abs(s.environmentIntensity - env) > 0.005) moving = true;
       s.environmentIntensity += (env - s.environmentIntensity) * k;
     }
+    if (hemi.current) {
+      const hTarget = wide ? m.hemi * 3 : m.hemi;
+      if (Math.abs(hemi.current.intensity - hTarget) > 0.002) moving = true;
+      hemi.current.intensity += (hTarget - hemi.current.intensity) * k;
+    }
     gl.toneMappingExposure += (m.exposure - gl.toneMappingExposure) * k;
     if (moving) invalidate();
   });
@@ -69,8 +77,8 @@ export function Lighting({ mood, shadows, shadowMapSize = 2048, span = 6 }: { mo
         {/* thin strip light for crisp clearcoat highlights */}
         <Lightformer form="rect" intensity={4} color="#ffffff" position={[0, 3.2, 6]} rotation={[-Math.PI / 4, 0, 0]} scale={[6, 0.15, 1]} />
       </Environment>
-      <hemisphereLight ref={hemi} args={[m.fill, "#3a3631", wide ? 0.55 : 0.18]} />
-      {wide && <ambientLight intensity={0.35} color={m.fill} />}
+      <hemisphereLight ref={hemi} args={[m.fill, "#3a3631", wide ? m.hemi * 3 : m.hemi]} />
+      {wide && <ambientLight intensity={m.night ? 0.03 : 0.35} color={m.fill} />}
       <directionalLight
         ref={sun}
         position={sunPos}

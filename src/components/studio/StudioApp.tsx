@@ -569,6 +569,60 @@ export default function StudioApp() {
     </div>
   );
 
+  const night = st.mood === "night";
+  const anyOpen = Object.values(st.opened).some(Boolean);
+  const roomControls = (
+    <div className="glass flex items-center gap-0.5 rounded-full p-1" role="group" aria-label="Room">
+      <button
+        onClick={() => st.setMood(night ? "morning" : "night")}
+        aria-label={night ? "Switch to daylight" : "Switch to night"}
+        title={night ? "Daylight" : "Night"}
+        className="flex h-9 items-center gap-1.5 rounded-full px-3 text-[13px] text-porcelain/90 hover:bg-white/10"
+      >
+        {night ? (
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+            <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" />
+          </svg>
+        ) : (
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+          </svg>
+        )}
+        <span className="hidden sm:inline">{night ? "Night" : "Day"}</span>
+      </button>
+      <button
+        onClick={() => st.setLights(!st.lightsOn)}
+        aria-pressed={st.lightsOn}
+        aria-label={st.lightsOn ? "Switch the lights off" : "Switch the lights on"}
+        title="Light switch"
+        className={`flex h-9 items-center gap-1.5 rounded-full px-3 text-[13px] transition-colors ${st.lightsOn ? "bg-champagne text-ink" : "text-porcelain/90 hover:bg-white/10"}`}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill={st.lightsOn ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.7" aria-hidden>
+          <path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3Z" />
+        </svg>
+        <span className="hidden sm:inline">Lights</span>
+      </button>
+      <button
+        onClick={() => st.setOpenMode(!st.openMode)}
+        aria-pressed={st.openMode}
+        title="Tap any door or drawer to open it"
+        className={`flex h-9 items-center gap-1.5 rounded-full px-3 text-[13px] transition-colors ${st.openMode ? "bg-porcelain text-ink" : "text-porcelain/90 hover:bg-white/10"}`}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+          <path d="M4 3h9v18H4zM13 5l6 2v12l-6 2" />
+          <circle cx="10.5" cy="12" r=".8" fill="currentColor" />
+        </svg>
+        <span className="hidden sm:inline">Open doors</span>
+      </button>
+      {anyOpen && (
+        <button onClick={st.closeAll} className="h-9 rounded-full px-3 text-[13px] text-porcelain/90 hover:bg-white/10">
+          Close all
+        </button>
+      )}
+    </div>
+  );
+
   const history = (
     <div className="glass flex items-center rounded-full p-1">
       <ToolButton onClick={st.undo} disabled={!st.past.length} label="Undo">
@@ -619,6 +673,11 @@ export default function StudioApp() {
             st.select(z);
             if (mobile && sheet === "peek") setSheet("half");
           }}
+          lightsOn={st.lightsOn}
+          onLights={() => st.setLights(!st.lightsOn)}
+          opened={st.opened}
+          openMode={st.openMode && !st.comparing}
+          onToggle={st.toggleOpen}
         />
       ) : (
         <FallbackStage />
@@ -715,6 +774,7 @@ export default function StudioApp() {
             </div>
             {homeBar && <div className="shrink-0">{homeBar}</div>}
             <div className="shrink-0">{viewControls}</div>
+            <div className="shrink-0">{roomControls}</div>
             <div className="shrink-0">{history}</div>
           </div>
         </div>
@@ -771,11 +831,12 @@ export default function StudioApp() {
         {stage}
         <div className="absolute left-4 top-4 z-10 flex flex-wrap gap-2">
           {viewControls}
+          {roomControls}
           {history}
           {homeBar}
         </div>
         <p className="caption pointer-events-none absolute bottom-4 right-4 text-stone-light">
-          {st.scheme.scene === "home" && st.camera === "walk" ? "Drag to look around · W A S D, arrow keys or scroll to walk · click a surface to select it" : "Drag to orbit · scroll to zoom · click a surface to select it"}
+          {st.scheme.scene === "home" && st.camera === "walk" ? "Drag to look around · W A S D, arrow keys or scroll to walk · click a surface to select it" : st.openMode ? "Click any door or drawer to open it · click the tap to run it" : "Drag to orbit · scroll to zoom · click a surface to select it · double-click a door to open it"}
         </p>
       </div>
       <aside aria-label="Studio controls" className="flex w-[440px] shrink-0 flex-col border-l border-white/8 bg-[#191917]">

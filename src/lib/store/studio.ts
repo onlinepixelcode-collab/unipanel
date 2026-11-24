@@ -22,6 +22,16 @@ interface StudioState {
   slot: "A" | "B";
   other: Scheme;
   comparing: boolean;
+  /** Room interaction: the light switch, opened fronts (by motion id), the tap, and "open doors" mode. */
+  lightsOn: boolean;
+  opened: Record<string, boolean>;
+  tapOn: boolean;
+  openMode: boolean;
+  setLights: (on: boolean) => void;
+  toggleOpen: (id: string) => void;
+  closeAll: () => void;
+  setTap: (on: boolean) => void;
+  setOpenMode: (on: boolean) => void;
 
   commit: (next: Scheme, msg?: string) => void;
   setFinish: (zone: Zone, id: string, label?: string) => void;
@@ -65,6 +75,15 @@ export const useStudio = create<StudioState>()((set, get) => ({
   slot: "A",
   other: DEFAULT_SCHEME,
   comparing: false,
+  lightsOn: false,
+  opened: {},
+  tapOn: false,
+  openMode: false,
+  setLights: (lightsOn) => set({ lightsOn, announce: lightsOn ? "Lights on" : "Lights off" }),
+  toggleOpen: (id) => set((st) => ({ opened: { ...st.opened, [id]: !st.opened[id] } })),
+  closeAll: () => set({ opened: {}, tapOn: false }),
+  setTap: (tapOn) => set({ tapOn }),
+  setOpenMode: (openMode) => set({ openMode, announce: openMode ? "Tap a door or drawer to open it" : "Finish mode" }),
 
   commit: (next, msg) =>
     set((st) => ({ scheme: next, past: [...st.past, st.scheme].slice(-HISTORY), future: [], announce: msg ?? st.announce })),
@@ -97,12 +116,12 @@ export const useStudio = create<StudioState>()((set, get) => ({
     const s = get().scheme;
     if (s.scene === scene) return;
     get().commit({ ...s, scene }, `Scene changed`);
-    set({ selected: null, camera: "overview", cameraNonce: get().cameraNonce + 1 });
+    set({ opened: {}, tapOn: false, selected: null, camera: "overview", cameraNonce: get().cameraNonce + 1 });
   },
   setLayout: (layout) => {
     const s = get().scheme;
     get().commit({ ...s, scene: "kitchen", layout }, `Layout changed`);
-    set({ camera: "overview", cameraNonce: get().cameraNonce + 1 });
+    set({ opened: {}, tapOn: false, camera: "overview", cameraNonce: get().cameraNonce + 1 });
   },
   setOption: (key, value) => get().commit({ ...get().scheme, [key]: value }),
   load: (s) => set({ scheme: s, past: [], future: [] }),
@@ -119,7 +138,7 @@ export const useStudio = create<StudioState>()((set, get) => ({
   reset: () => get().commit(DEFAULT_SCHEME, "Scheme reset"),
   select: (z) => set({ selected: z }),
   hover: (z) => set({ hovered: z }),
-  setMood: (mood) => set({ mood }),
+  setMood: (mood) => set({ mood, lightsOn: mood === "night" || mood === "evening" }),
   setCamera: (camera) => set({ camera, cameraNonce: get().cameraNonce + 1 }),
   toggleFavourite: (id) => set((st) => ({ favourites: st.favourites.includes(id) ? st.favourites.filter((x) => x !== id) : [...st.favourites, id] })),
   switchSlot: (to) => {
@@ -131,3 +150,5 @@ export const useStudio = create<StudioState>()((set, get) => ({
   copyToOther: () => set((st) => ({ other: st.scheme, announce: `Design ${st.slot === "A" ? "B" : "A"} now matches design ${st.slot}` })),
   setComparing: (comparing) => set({ comparing }),
 }));
+
+if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") (window as unknown as { __studioStore?: typeof useStudio }).__studioStore = useStudio;

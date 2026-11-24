@@ -23,6 +23,23 @@ export interface Panel {
   mirror: boolean;
   door?: boolean;
   order: number;
+  /** Fronts that open: a drawer slides out, a door swings on its hinge side; a tap turns on. */
+  motion?: { id: string; kind: "drawer" | "hinge-l" | "hinge-r" | "tap"; travel?: number };
+  /** Handles ride along with the front they are fixed to. */
+  moveWith?: string;
+  /** Carcass drawn as an open box (18mm boards) with this many shelves, so open doors show a real interior. */
+  hollow?: number;
+}
+
+export type PropKind = "jars" | "plant" | "kettle" | "pot" | "boards" | "bowl" | "vase" | "books" | "plates" | "glasses" | "stool" | "folded" | "garments" | "soap" | "bottles" | "towel" | "speaker";
+
+/** Styling items (visual staging only): kitchenware, books, plants. Position is the item's base centre, in mm. */
+export interface Prop {
+  kind: PropKind;
+  pos: [number, number, number];
+  rotY: number;
+  /** span available along the run, mm (books, folded stacks, garments) */
+  span?: number;
 }
 
 export interface RoomInfo {
@@ -39,6 +56,7 @@ export interface RoomSpec {
   /** Whole-home tour: the rooms laid out side by side, joined by doorways. */
   rooms?: RoomInfo[];
   panels: Panel[];
+  props: Prop[];
   bounds: { width: number; depth: number; height: number };
   focus: [number, number, number];
   islandFocus?: [number, number, number];
@@ -69,10 +87,15 @@ interface UnitSpec {
 
 class Builder {
   panels: Panel[] = [];
+  props: Prop[] = [];
   private n = 0;
+  private m = 0;
   constructor(private s: Scheme) {}
   push(p: Omit<Panel, "key" | "order"> & { order?: number }) {
     this.panels.push({ ...p, key: `p${this.n++}`, order: p.order ?? 0.5 });
+  }
+  motionId() {
+    return `m${this.m++}`;
   }
   get scheme() {
     return this.s;
@@ -84,6 +107,8 @@ class Run {
   private cos: number;
   private sin: number;
   private doorIndex = 0;
+  private fronts = new Map<string, string>();
+  private prev: { x: number; y: number; w: number; h: number; kind: string } | null = null;
   constructor(
     private b: Builder,
     private origin: [number, number],
@@ -107,10 +132,26 @@ class Run {
       ...props,
     });
   }
-  /** A door/front with bookmatch bookkeeping. */
-  front(x: number, y: number, z: number, w: number, h: number, zone: Zone, order = 0.8) {
+  /** A styling item at a local position on this run. */
+  prop(kind: PropKind, x: number, y: number, z: number, rot = 0, span?: number) {
+    const wx = this.origin[0] + x * this.cos + z * this.sin;
+    const wz = this.origin[1] - x * this.sin + z * this.cos;
+    this.b.props.push({ kind, pos: [wx, y, wz], rotY: this.angle + rot, span });
+  }
+  /**
+   * A door/front with bookmatch bookkeeping. Low fronts are drawers; doors hinge on the left,
+   * and a door right beside another of the same size hinges on the right (a pair).
+   */
+  front(x: number, y: number, z: number, w: number, h: number, zone: Zone, order = 0.8, opts: { hinge?: "hinge-l" | "hinge-r"; travel?: number } = {}) {
     const i = this.doorIndex++;
-    this.add(x, y, z, w, h, DOOR, { zone, door: true, mirror: this.b.scheme.bookmatch && i % 2 === 1, order });
+    const id = this.b.motionId();
+    let kind: "drawer" | "hinge-l" | "hinge-r" = h < 300 ? "drawer" : "hinge-l";
+    const pv = this.prev;
+    if (kind !== "drawer" && pv && pv.kind === "hinge-l" && Math.abs(pv.y - y) < 1 && Math.abs(pv.h - h) < 1 && Math.abs(pv.x + pv.w - x) <= 6) kind = "hinge-r";
+    if (opts.hinge) kind = opts.hinge;
+    this.prev = { x, y, w, h, kind };
+    this.fronts.set(`${x}|${y}`, id);
+    this.add(x, y, z, w, h, DOOR, { zone, door: true, mirror: this.b.scheme.bookmatch && i % 2 === 1, order, motion: { id, kind, travel: opts.travel ?? 420 } });
   }
   resetPairs() {
     this.doorIndex = 0;
@@ -118,10 +159,16 @@ class Run {
   handle(x: number, y: number, z: number, w: number, h: number, orientation: "top" | "bottom" | "side-r" | "side-l") {
     const style = this.b.scheme.handle;
     if (style === "push") return;
+    const moveWith = this.fronts.get(`${x}|${y}`);
+    // a tall door with its handle on the left edge hinges on the right
+    if (orientation === "side-l" && moveWith) {
+      const p = this.b.panels.find((q) => q.motion?.id === moveWith);
+      if (p?.motion) p.motion.kind = "hinge-r";
+    }
     if (style === "jprofile") {
-      if (orientation === "top") this.add(x + GAP, y + h - 22, z + DOOR, w - GAP * 2, 22, 3, { zone: null, staging: "handle", order: 0.95 });
-      else if (orientation === "bottom") this.add(x + GAP, y, z + DOOR, w - GAP * 2, 22, 3, { zone: null, staging: "handle", order: 0.95 });
-      else this.add(orientation === "side-r" ? x + w - 22 : x, y + GAP, z + DOOR, 22, h - GAP * 2, 3, { zone: null, staging: "handle", order: 0.95 });
+      if (orientation === "top") this.add(x + GAP, y + h - 22, z + DOOR, w - GAP * 2, 22, 3, { zone: null, staging: "handle", order: 0.95, moveWith });
+      else if (orientation === "bottom") this.add(x + GAP, y, z + DOOR, w - GAP * 2, 22, 3, { zone: null, staging: "handle", order: 0.95, moveWith });
+      else this.add(orientation === "side-r" ? x + w - 22 : x, y + GAP, z + DOOR, 22, h - GAP * 2, 3, { zone: null, staging: "handle", order: 0.95, moveWith });
       return;
     }
     // slim bar on standoffs
@@ -129,11 +176,11 @@ class Run {
     if (orientation === "top" || orientation === "bottom") {
       const len = Math.min(w - 140, 320);
       const by = orientation === "top" ? y + h - 70 : y + 58;
-      this.add(x + (w - len) / 2, by, z + DOOR + 22, len, t, t, { zone: null, staging: "handle", order: 0.95 });
+      this.add(x + (w - len) / 2, by, z + DOOR + 22, len, t, t, { zone: null, staging: "handle", order: 0.95, moveWith });
     } else {
       const len = Math.min(h - 200, 640);
       const bx = orientation === "side-r" ? x + w - 60 : x + 48;
-      this.add(bx, y + (h - len) / 2, z + DOOR + 22, t, len, t, { zone: null, staging: "handle", order: 0.95 });
+      this.add(bx, y + (h - len) / 2, z + DOOR + 22, t, len, t, { zone: null, staging: "handle", order: 0.95, moveWith });
     }
   }
 }
@@ -148,6 +195,8 @@ function buildKitchenRun(b: Builder, run: Run, units: UnitSpec[], opts: { gableS
   run.add(0, 0, BASE_DEPTH - 50, total, PLINTH, DOOR, { zone: "kickplate", order: 0.15 });
 
   let worktopStart: number | null = null;
+  let shelfIndex = 0;
+  const TOP = PLINTH + CARCASS + WORKTOP_T;
   const closeWorktop = (end: number) => {
     if (worktopStart === null) return;
     run.add(worktopStart, PLINTH + CARCASS, 0, end - worktopStart, WORKTOP_T, 620, { zone: null, staging: "worktop", order: 0.6 });
@@ -157,13 +206,23 @@ function buildKitchenRun(b: Builder, run: Run, units: UnitSpec[], opts: { gableS
   for (const u of units) {
     if (u.type === "tall") {
       closeWorktop(x);
-      run.add(x, PLINTH, 0, u.w, TALL_TOP - PLINTH, BASE_DEPTH, { zone: null, staging: "carcass", order: 0.25 });
+      run.add(x, PLINTH, 0, u.w, TALL_TOP - PLINTH, BASE_DEPTH, { zone: null, staging: "carcass", order: 0.25, hollow: 4 });
       run.front(x + GAP, PLINTH + GAP, BASE_DEPTH, u.w - GAP * 2, TALL_TOP - PLINTH - GAP * 2, "tallUnits");
       run.handle(x + GAP, PLINTH + GAP, BASE_DEPTH, u.w - GAP * 2, TALL_TOP - PLINTH - GAP * 2, "side-r");
       run.add(x, TALL_TOP, 0, u.w, CEILING - TALL_TOP, BASE_DEPTH + DOOR, { zone: null, staging: "bulkhead", order: 0.98 });
     } else {
-      if (worktopStart === null) worktopStart = x;
-      run.add(x, PLINTH, 0, u.w, CARCASS, BASE_DEPTH, { zone: null, staging: "carcass", order: 0.25 });
+      if (u.fixture === "sink") {
+        // worktop with a real cut-out around the undermount sink
+        closeWorktop(x);
+        const c0 = x + (u.w - 560) / 2;
+        const c1 = c0 + 560;
+        const wt = { zone: null, staging: "worktop" as const, order: 0.6 };
+        run.add(x, PLINTH + CARCASS, 0, c0 - x, WORKTOP_T, 620, wt);
+        run.add(c1, PLINTH + CARCASS, 0, x + u.w - c1, WORKTOP_T, 620, wt);
+        run.add(c0, PLINTH + CARCASS, 0, 560, WORKTOP_T, 90, wt);
+        run.add(c0, PLINTH + CARCASS, 490, 560, WORKTOP_T, 130, wt);
+      } else if (worktopStart === null) worktopStart = x;
+      run.add(x, PLINTH, 0, u.w, CARCASS, BASE_DEPTH, { zone: null, staging: "carcass", order: 0.25, hollow: u.front === "drawers" ? 0 : 1 });
       const fy = PLINTH + GAP;
       const fh = CARCASS - GAP * 2;
       if (u.front === "drawers") {
@@ -188,12 +247,32 @@ function buildKitchenRun(b: Builder, run: Run, units: UnitSpec[], opts: { gableS
 
       if (u.fixture === "sink") {
         run.add(x + (u.w - 560) / 2, PLINTH + CARCASS + WORKTOP_T - 2, 90, 560, 4, 400, { zone: null, staging: "sink", order: 0.9 });
-        run.add(x + u.w / 2 - 15, PLINTH + CARCASS + WORKTOP_T, 40, 30, 300, 30, { zone: null, staging: "tap", order: 0.92 });
+        run.add(x + u.w / 2 - 15, PLINTH + CARCASS + WORKTOP_T, 40, 30, 300, 30, { zone: null, staging: "tap", order: 0.92, motion: { id: b.motionId(), kind: "tap" } });
+        run.prop("soap", x + u.w / 2 + 130, TOP, 70);
       }
-      if (u.fixture === "hob") run.add(x + (u.w - 580) / 2, PLINTH + CARCASS + WORKTOP_T, 60, 580, 5, 500, { zone: null, staging: "hob", order: 0.9 });
+      if (u.fixture === "hob") {
+        run.add(x + (u.w - 580) / 2, PLINTH + CARCASS + WORKTOP_T, 60, 580, 5, 500, { zone: null, staging: "hob", order: 0.9 });
+        run.prop("pot", x + u.w / 2 - 120, TOP + 5, 200);
+      }
+      // styling on the worktop
+      if (!u.fixture && u.upper === "wall") {
+        if (u.front === "drawers") run.prop("jars", x + u.w / 2, TOP, 110);
+        else {
+          run.prop("kettle", x + 170, TOP, 150, -0.4);
+          run.prop("plant", x + u.w - 130, TOP, 130);
+        }
+      }
+      if (u.upper === "shelf") {
+        shelfIndex++;
+        if (shelfIndex === 1) run.prop("boards", x + u.w / 2, TOP, 40);
+        else run.prop("bowl", x + u.w / 2, TOP, 260);
+      }
 
       if (u.upper === "wall") {
-        run.add(x, WALL_BOTTOM, 0, u.w, WALL_H, WALL_DEPTH, { zone: null, staging: "carcass", order: 0.4 });
+        run.add(x, WALL_BOTTOM, 0, u.w, WALL_H, WALL_DEPTH, { zone: null, staging: "carcass", order: 0.4, hollow: 1 });
+        // inside the wall unit: plates below the shelf, glasses on it
+        run.prop("plates", x + u.w / 2 - 110, WALL_BOTTOM + DOOR, 165);
+        run.prop("glasses", x + u.w / 2 + 90, WALL_BOTTOM + WALL_H / 2 + DOOR / 2, 165);
         run.front(x + GAP, WALL_BOTTOM + GAP, WALL_DEPTH, u.w - GAP * 2, WALL_H - GAP * 2, "wallDoors");
         run.handle(x + GAP, WALL_BOTTOM + GAP, WALL_DEPTH, u.w - GAP * 2, WALL_H - GAP * 2, "bottom");
         run.add(x, PLINTH + CARCASS + WORKTOP_T, 0, u.w, WALL_BOTTOM - (PLINTH + CARCASS + WORKTOP_T), 12, { zone: "splashback", order: 0.55 });
@@ -202,8 +281,13 @@ function buildKitchenRun(b: Builder, run: Run, units: UnitSpec[], opts: { gableS
         run.add(x + 25, WALL_BOTTOM - 5, WALL_DEPTH - 70, u.w - 50, 5, 14, { zone: null, staging: "led", order: 0.96 });
       } else if (u.upper === "shelf") {
         run.add(x, PLINTH + CARCASS + WORKTOP_T, 0, u.w, 2400 - (PLINTH + CARCASS + WORKTOP_T), DOOR, { zone: "cladding", order: 0.5 });
-        for (const sy of [1340, 1800]) {
+        for (const [k, sy] of [1340, 1800].entries()) {
           run.add(x + 30, sy, DOOR, u.w - 60, s.buildup, 290, { zone: "shelving", order: 0.85 });
+          const top = sy + s.buildup;
+          const pick = (k + shelfIndex) % 3;
+          if (pick === 0) run.prop("books", x + u.w / 2, top, 160, 0, u.w - 160);
+          else if (pick === 1) run.prop("vase", x + u.w / 2 + 60, top, 150);
+          else run.prop("plates", x + u.w / 2, top, 150);
         }
       }
     }
@@ -228,7 +312,7 @@ function buildIsland(b: Builder, centerZ: number, cx = 0) {
   const widths = [600, 600, 600, 600];
   let x = 0;
   widths.forEach((w, i) => {
-    run.add(x, PLINTH, 0, w, CARCASS, BASE_DEPTH, { zone: null, staging: "carcass", order: 0.25 });
+    run.add(x, PLINTH, 0, w, CARCASS, BASE_DEPTH, { zone: null, staging: "carcass", order: 0.25, hollow: i % 2 === 0 ? 0 : 1 });
     if (i % 2 === 0) {
       const hs = [176, 268, 268];
       let y = PLINTH + CARCASS;
@@ -262,6 +346,10 @@ function buildIsland(b: Builder, centerZ: number, cx = 0) {
   }
   // worktop
   b.push({ zone: null, staging: "worktop", size: [len, WORKTOP_T, depth], pos: [cx, PLINTH + CARCASS + WORKTOP_T / 2, centerZ], rotY: 0, uvX: 0, mirror: false, order: 0.65 });
+  // styling: fruit bowl and a vase on the worktop, three stools tucked under the overhang
+  const top = PLINTH + CARCASS + WORKTOP_T;
+  b.props.push({ kind: "bowl", pos: [cx - 620, top, centerZ + 160], rotY: 0.3 }, { kind: "vase", pos: [cx + 760, top, centerZ + 200], rotY: 0 });
+  for (const dx of [-750, 0, 750]) b.props.push({ kind: "stool", pos: [cx + dx, 0, zFront + 900], rotY: 0 });
 }
 
 /** A peninsula running out from the back run: fronts face the kitchen, a seating overhang on the other side, waterfall end. */
@@ -273,7 +361,7 @@ function buildPeninsula(b: Builder, ox: number) {
   run.add(0, 0, BASE_DEPTH - 50, len, PLINTH, DOOR, { zone: "kickplate", order: 0.15 });
   for (let i = 0; i < 4; i++) {
     const x = i * 600;
-    run.add(x, PLINTH, 0, 600, CARCASS, BASE_DEPTH, { zone: null, staging: "carcass", order: 0.25 });
+    run.add(x, PLINTH, 0, 600, CARCASS, BASE_DEPTH, { zone: null, staging: "carcass", order: 0.25, hollow: i % 2 === 0 ? 0 : 1 });
     if (i % 2 === 0) {
       let y = PLINTH + CARCASS;
       for (const h of [176, 268, 268]) {
@@ -292,6 +380,8 @@ function buildPeninsula(b: Builder, ox: number) {
   run.add(1100, PLINTH + CARCASS + WORKTOP_T, 80, 580, 5, 480, { zone: null, staging: "hob", order: 0.9 });
   // waterfall end
   run.add(len, 0, -320, DOOR, PLINTH + CARCASS + WORKTOP_T, 920, { zone: "islandEnds", order: 0.45 });
+  for (const x of [450, 1250, 2050]) run.prop("stool", x, 0, -230);
+  run.prop("bowl", 380, PLINTH + CARCASS + WORKTOP_T, 200, 0.4);
 }
 
 function kitchen(b: Builder): RoomSpec {
@@ -376,6 +466,7 @@ function kitchen(b: Builder): RoomSpec {
 
   return {
     panels: b.panels,
+    props: b.props,
     bounds: { width, depth, height: 2700 },
     focus: [0, 1100, 900],
     islandFocus,
@@ -394,7 +485,11 @@ function wardrobeRun(b: Builder, run: Run, units: UnitSpec[]) {
   run.add(0, 0, BASE_DEPTH - 50, total, K, DOOR, { zone: "kickplate", order: 0.15 });
   for (const u of units) {
     if (u.type === "wardrobe") {
-      run.add(x, K, 0, u.w, H - K, BASE_DEPTH, { zone: null, staging: "carcass", order: 0.25 });
+      run.add(x, K, 0, u.w, H - K, BASE_DEPTH, { zone: null, staging: "carcass", order: 0.25, hollow: 1 });
+      // behind the doors: a hanging rail with clothes and folded stacks on the top shelf
+      run.add(x + DOOR, 1860, BASE_DEPTH / 2, u.w - DOOR * 2, 16, 16, { zone: null, staging: "rail", order: 0.9 });
+      run.prop("garments", x + u.w / 2, 1860, BASE_DEPTH / 2, 0, u.w - 80);
+      run.prop("folded", x + u.w / 2, K + (H - K) * 0.82 + DOOR / 2, 280, 0, u.w - 120);
       run.front(x + GAP, K + GAP, BASE_DEPTH, u.w - GAP * 2, H - K - GAP * 2, "wardrobeDoors");
       run.handle(x + GAP, K + GAP, BASE_DEPTH, u.w - GAP * 2, H - K - GAP * 2, "side-r");
     } else {
@@ -407,8 +502,12 @@ function wardrobeRun(b: Builder, run: Run, units: UnitSpec[]) {
       if (u.type === "wardrobe-open-hang") {
         run.add(x + DOOR, 1900, DOOR, u.w - DOOR * 2, b.scheme.buildup, BASE_DEPTH - DOOR, { zone: "shelving", order: 0.8 });
         run.add(x + DOOR, 1820, BASE_DEPTH / 2, u.w - DOOR * 2, 16, 16, { zone: null, staging: "rail", order: 0.9 });
+        run.prop("garments", x + u.w / 2, 1820, BASE_DEPTH / 2, 0, u.w - 80);
       } else {
         for (const sy of [520, 920, 1320, 1720, 2060]) run.add(x + DOOR, sy, DOOR, u.w - DOOR * 2, b.scheme.buildup, BASE_DEPTH - DOOR - 20, { zone: "shelving", order: 0.8 });
+        run.prop("folded", x + u.w / 2, 920 + b.scheme.buildup, 280, 0, u.w - 120);
+        run.prop("folded", x + u.w / 2, 1320 + b.scheme.buildup, 280, 0, u.w - 120);
+        run.prop("books", x + u.w / 2, 1720 + b.scheme.buildup, 260, 0, u.w - 160);
       }
     }
     x += u.w;
@@ -446,7 +545,7 @@ function wardrobe(b: Builder): RoomSpec {
   // dresser island
   const isl = new Run(b, [-600, 2000], 0);
   isl.add(0, 0, 0, 1200, 100, 600, { zone: "kickplate", order: 0.15 });
-  isl.add(0, 100, 0, 1200, 780, 582, { zone: null, staging: "carcass", order: 0.25 });
+  isl.add(0, 100, 0, 1200, 780, 582, { zone: null, staging: "carcass", order: 0.25, hollow: 0 });
   for (const [i, h] of [260, 260, 260].entries()) {
     const y = 100 + i * 260;
     isl.front(GAP, y + GAP / 2, 582, 600 - GAP * 1.5, h - GAP, "wardrobeDoors");
@@ -457,9 +556,12 @@ function wardrobe(b: Builder): RoomSpec {
   isl.add(-DOOR, 0, 0, DOOR, 900, 600, { zone: "gables", order: 0.3 });
   isl.add(1200, 0, 0, DOOR, 900, 600, { zone: "gables", order: 0.3 });
   isl.add(-DOOR, 880, 0, 1200 + DOOR * 2, b.scheme.buildup, 600, { zone: "shelving", order: 0.7 });
+  isl.prop("vase", 250, 880 + b.scheme.buildup, 300);
+  isl.prop("books", 820, 880 + b.scheme.buildup, 300, 0.2, 260);
 
   return {
     panels: b.panels,
+    props: b.props,
     bounds: { width, depth: 4800, height: 2700 },
     focus: [0, 1200, 1200],
     detailFocus: [-backLen / 2 + 900, 1300, 600],
@@ -475,7 +577,7 @@ function media(b: Builder): RoomSpec {
   wallRun.add(0, 0, 0, W, 2700, DOOR, { zone: "cladding", order: 0.2 });
   // tall units at each end
   for (const x of [0, W - 600]) {
-    wallRun.add(x, 0, DOOR, 600, 2400, 400, { zone: null, staging: "carcass", order: 0.3 });
+    wallRun.add(x, 0, DOOR, 600, 2400, 400, { zone: null, staging: "carcass", order: 0.3, hollow: 4 });
     wallRun.front(x + GAP, GAP, DOOR + 400, 600 - GAP * 2, 2400 - GAP * 2, "tallUnits");
     wallRun.handle(x + GAP, GAP, DOOR + 400, 600 - GAP * 2, 2400 - GAP * 2, x === 0 ? "side-r" : "side-l");
     wallRun.add(x === 0 ? 600 : x - DOOR, 0, DOOR, DOOR, 2400, 420, { zone: "gables", order: 0.35 });
@@ -483,7 +585,7 @@ function media(b: Builder): RoomSpec {
   // floating TV unit
   const tvW = 2600;
   const tvX = (W - tvW) / 2;
-  wallRun.add(tvX, 260, DOOR, tvW, 420, 420, { zone: null, staging: "carcass", order: 0.4 });
+  wallRun.add(tvX, 260, DOOR, tvW, 420, 420, { zone: null, staging: "carcass", order: 0.4, hollow: 0 });
   for (let i = 0; i < 4; i++) {
     wallRun.front(tvX + i * (tvW / 4) + GAP, 260 + GAP, DOOR + 420, tvW / 4 - GAP * 2, 420 - GAP * 2, "baseDoors");
     wallRun.handle(tvX + i * (tvW / 4) + GAP, 260 + GAP, DOOR + 420, tvW / 4 - GAP * 2, 420 - GAP * 2, "top");
@@ -491,14 +593,23 @@ function media(b: Builder): RoomSpec {
   wallRun.add(tvX, 680, DOOR, tvW, b.scheme.buildup, 440, { zone: "shelving", order: 0.7 });
   // floating build-up shelves either side of the screen
   for (const sx of [tvX + 60, tvX + tvW - 560]) {
-    for (const sy of [1350, 1800]) wallRun.add(sx, sy, DOOR, 500, b.scheme.buildup, 280, { zone: "shelving", order: 0.8 });
+    for (const [k, sy] of [1350, 1800].entries()) {
+      wallRun.add(sx, sy, DOOR, 500, b.scheme.buildup, 280, { zone: "shelving", order: 0.8 });
+      const top = sy + b.scheme.buildup;
+      if ((k + (sx > tvX + 100 ? 1 : 0)) % 2 === 0) wallRun.prop("books", sx + 250, top, DOOR + 140, 0, 380);
+      else wallRun.prop("vase", sx + 250, top, DOOR + 140);
+    }
   }
+  wallRun.prop("vase", tvX + 260, 680 + b.scheme.buildup, DOOR + 220);
+  wallRun.prop("books", tvX + tvW - 300, 680 + b.scheme.buildup, DOOR + 220, 0, 320);
+  wallRun.prop("plant", -250, 0, 500);
   wallRun.add((W - 1450) / 2, 1080, DOOR, 1450, 820, 40, { zone: null, staging: "tv", order: 0.95 });
   return {
     panels: b.panels,
     bounds: { width: W + 800, depth: 4600, height: 2700 },
     focus: [0, 1200, 400],
     detailFocus: [0, 700, 450],
+    props: b.props,
     walls: { left: true, right: true },
   };
 }
@@ -511,7 +622,7 @@ function vanity(b: Builder): RoomSpec {
   run.add(0, 0, 0, W, 2700, DOOR, { zone: "cladding", order: 0.2 });
   const vx = 600;
   const vw = 1400;
-  run.add(vx, 420, DOOR, vw, 450, 470, { zone: null, staging: "carcass", order: 0.3 });
+  run.add(vx, 420, DOOR, vw, 450, 470, { zone: null, staging: "carcass", order: 0.3, hollow: 0 });
   run.front(vx + GAP, 420 + GAP, DOOR + 470, vw / 2 - GAP * 1.5, 450 - GAP * 2, "baseDoors");
   run.front(vx + vw / 2 + GAP / 2, 420 + GAP, DOOR + 470, vw / 2 - GAP * 1.5, 450 - GAP * 2, "baseDoors");
   run.handle(vx + GAP, 420 + GAP, DOOR + 470, vw / 2 - GAP * 1.5, 450 - GAP * 2, "top");
@@ -520,18 +631,24 @@ function vanity(b: Builder): RoomSpec {
   run.add(vx + vw, 420, DOOR, DOOR, 480, 490, { zone: "gables", order: 0.35 });
   run.add(vx, 870, DOOR, vw, 30, 490, { zone: null, staging: "worktop", order: 0.6 });
   run.add(vx + vw / 2 - 260, 900, DOOR + 70, 520, 120, 380, { zone: null, staging: "basin", order: 0.9 });
-  run.add(vx + vw / 2 - 15, 900, DOOR + 20, 30, 260, 30, { zone: null, staging: "tap", order: 0.92 });
+  run.add(vx + vw / 2 - 15, 900, DOOR + 20, 30, 260, 30, { zone: null, staging: "tap", order: 0.92, motion: { id: b.motionId(), kind: "tap" } });
+  run.prop("soap", vx + vw / 2 + 360, 900, DOOR + 120);
   run.add(vx, 900, DOOR, vw, 600, 12, { zone: "splashback", order: 0.5 });
   // mirror cabinet
-  run.add(vx + 150, 1560, DOOR, vw - 300, 700, 150, { zone: null, staging: "carcass", order: 0.6 });
+  run.add(vx + 150, 1560, DOOR, vw - 300, 700, 150, { zone: null, staging: "carcass", order: 0.6, hollow: 1 });
+  run.prop("bottles", vx + 150 + (vw - 300) / 2, 1560 + DOOR, DOOR + 70);
   run.front(vx + 150 + GAP, 1560 + GAP, DOOR + 150, (vw - 300) / 2 - GAP * 1.5, 700 - GAP * 2, "wallDoors");
   run.front(vx + 150 + (vw - 300) / 2 + GAP / 2, 1560 + GAP, DOOR + 150, (vw - 300) / 2 - GAP * 1.5, 700 - GAP * 2, "wallDoors");
   // open build-up shelving beside the vanity
   for (const sy of [1100, 1450, 1800]) run.add(vx + vw + 200, sy, DOOR, 520, b.scheme.buildup, 240, { zone: "shelving", order: 0.8 });
+  run.prop("towel", vx + vw + 460, 1100 + b.scheme.buildup, DOOR + 120);
+  run.prop("plant", vx + vw + 460, 1450 + b.scheme.buildup, DOOR + 120);
+  run.prop("bottles", vx + vw + 460, 1800 + b.scheme.buildup, DOOR + 120);
   return {
     panels: b.panels,
     bounds: { width: W + 600, depth: 3600, height: 2700 },
     focus: [-W / 2 + vx + vw / 2, 1100, 400],
+    props: b.props,
     detailFocus: [-W / 2 + vx + vw / 2, 640, 500],
     walls: { left: true, right: true },
   };
@@ -548,13 +665,23 @@ function home(s: Scheme): RoomSpec {
     { id: "bathroom", name: "Bathroom", spec: vanity(new Builder({ ...s, scene: "vanity" })) },
   ];
   const panels: Panel[] = [];
+  const props: Prop[] = [];
   const rooms: RoomInfo[] = [];
   let cursor = 0;
   let n = 0;
   for (const p of parts) {
     const span = p.spec.bounds.width + 600; // the room's own wall-to-wall width
     const cx = cursor + span / 2;
-    for (const pn of p.spec.panels) panels.push({ ...pn, key: `h${n++}`, pos: [pn.pos[0] + cx, pn.pos[1], pn.pos[2]] });
+    const tag = p.id.slice(0, 2);
+    for (const pn of p.spec.panels)
+      panels.push({
+        ...pn,
+        key: `h${n++}`,
+        pos: [pn.pos[0] + cx, pn.pos[1], pn.pos[2]],
+        motion: pn.motion ? { ...pn.motion, id: tag + pn.motion.id } : undefined,
+        moveWith: pn.moveWith ? tag + pn.moveWith : undefined,
+      });
+    for (const pr of p.spec.props) props.push({ ...pr, pos: [pr.pos[0] + cx, pr.pos[1], pr.pos[2]] });
     rooms.push({ id: p.id, name: p.name, x0: cursor, x1: cursor + span, eye: [cx + span * 0.18, 1600, HOME_DEPTH - 500], look: [cx - span * 0.05, 1250, 600] });
     cursor += span + 120; // partition wall
   }
@@ -562,6 +689,7 @@ function home(s: Scheme): RoomSpec {
   // centre the house on x = 0
   const shift = -total / 2;
   for (const pn of panels) pn.pos[0] += shift;
+  for (const pr of props) pr.pos[0] += shift;
   for (const r of rooms) {
     r.x0 += shift;
     r.x1 += shift;
@@ -571,6 +699,7 @@ function home(s: Scheme): RoomSpec {
   const k = parts[0].spec;
   return {
     panels,
+    props,
     rooms,
     bounds: { width: total, depth: HOME_DEPTH, height: 2700 },
     focus: [0, 900, HOME_DEPTH / 2],
