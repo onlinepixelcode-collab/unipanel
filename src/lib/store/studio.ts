@@ -64,7 +64,7 @@ export const useStudio = create<StudioState>()((set, get) => ({
   future: [],
   selected: null,
   hovered: null,
-  mood: "gallery",
+  mood: "morning",
   camera: "overview",
   cameraNonce: 0,
   favourites: [],

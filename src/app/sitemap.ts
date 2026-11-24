@@ -6,7 +6,7 @@ import { COLLECTIONS } from "@/data/collections";
 export const dynamic = "force-static";
 
 export default function sitemap(): MetadataRoute.Sitemap {
-  const pages = ["", "boards", "collections", "catalogue", "studio", "exclusive", "services", "inspiration", "sample-box", "professionals", "showrooms", "about", "care", "journal", "contact", "privacy", "cookies"];
+  const pages = ["", "boards", "collections", "catalogue", "studio", "studio/photo", "exclusive", "services", "inspiration", "sample-box", "professionals", "showrooms", "about", "care", "journal", "contact", "privacy", "cookies"];
   return [
     ...pages.map((p) => ({ url: `${SITE.url}/${p ? p + "/" : ""}`, changeFrequency: "monthly" as const, priority: p === "" ? 1 : 0.7 })),
     ...COLLECTIONS.map((c) => ({ url: `${SITE.url}/collections/${c.id}/`, changeFrequency: "monthly" as const, priority: 0.8 })),

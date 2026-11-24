@@ -71,7 +71,7 @@ export default function StudioApp() {
   const [ready, setReady] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [hoverPt, setHoverPt] = useState<{ x: number; y: number } | null>(null);
-  const [sheet, setSheet] = useState<"peek" | "half" | "full">("peek");
+  const [step, setStep] = useState(1);
   const [split, setSplit] = useState(0.5);
   const [showPalette, setShowPalette] = useState(false);
   const [ar, setAr] = useState(false);
@@ -548,107 +548,379 @@ export default function StudioApp() {
     </div>
   );
 
-  const viewControls = (
-    <div className="glass flex items-center gap-1 rounded-full p-1">
-      <label className="sr-only" htmlFor="mood">
-        Lighting mood
-      </label>
-      <select id="mood" value={st.mood} onChange={(e) => st.setMood(e.target.value as Mood)} className="h-9 rounded-full bg-transparent px-3 text-[13px] text-porcelain focus:outline-none">
-        {(Object.keys(MOODS) as Mood[]).map((m) => (
-          <option key={m} value={m} className="bg-ink">
-            {MOODS[m].label}
-          </option>
+  // ---------- guided steps (desktop panel and mobile wizard share them) ----------
+  const STEPS = [
+    { id: "room", label: "Room", title: "Choose your room" },
+    { id: "surfaces", label: "Surfaces", title: "Pick your finishes" },
+    { id: "worktop", label: "Worktop & floor", title: "Worktop, floor & handles" },
+    { id: "light", label: "Light", title: "Set the light" },
+    { id: "done", label: "Your design", title: "Your design" },
+  ] as const;
+  const night = st.mood === "night";
+  const anyOpen = Object.values(st.opened).some(Boolean);
+
+  const icon = {
+    sun: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+        <circle cx="12" cy="12" r="4" />
+        <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+      </svg>
+    ),
+    moon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+        <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" />
+      </svg>
+    ),
+    bulb: (on: boolean) => (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill={on ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.7" aria-hidden>
+        <path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3Z" />
+      </svg>
+    ),
+    door: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+        <path d="M4 3h9v18H4zM13 5l6 2v12l-6 2" />
+        <circle cx="10.5" cy="12" r=".8" fill="currentColor" />
+      </svg>
+    ),
+    undo: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+        <path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3" />
+      </svg>
+    ),
+    redo: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+        <path d="m15 14 5-5-5-5M20 9H10a6 6 0 0 0 0 12h3" />
+      </svg>
+    ),
+    split: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <path d="M12 4v16" />
+      </svg>
+    ),
+    camera: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>
+        <path d="M4 8h3l2-3h6l2 3h3v11H4z" />
+        <circle cx="12" cy="13" r="3.5" />
+      </svg>
+    ),
+  };
+
+  const IconBtn = ({ on, onClick, label, children, text }: { on?: boolean; onClick: () => void; label: string; children: React.ReactNode; text?: string }) => (
+    <button onClick={onClick} aria-pressed={on} aria-label={label} title={label} className={`flex h-9 items-center gap-1.5 rounded-full px-2.5 text-[13px] transition-colors ${on ? "bg-champagne text-ink" : "text-porcelain/90 hover:bg-white/10"}`}>
+      {children}
+      {text && <span className="hidden xl:inline">{text}</span>}
+    </button>
+  );
+
+  // floating controls over the render
+  const stageTopLeft = (
+    <div className="flex flex-wrap items-center gap-2">
+      <div className="glass flex items-center gap-0.5 rounded-full p-1">
+        {(["A", "B"] as const).map((d) => (
+          <button key={d} onClick={() => switchDesign(d)} aria-pressed={st.slot === d} title={`Edit design ${d}`} className={`h-9 rounded-full px-3 text-[13px] ${st.slot === d ? "bg-porcelain text-ink" : "text-porcelain/80 hover:text-porcelain"}`}>
+            {mobile ? d : `Design ${d}`}
+          </button>
         ))}
-      </select>
-      <span className="h-5 w-px bg-white/15" />
-      {CAMERAS.filter((c) => (st.scheme.scene === "home" ? c.id === "detail" : c.id !== "island" || (st.scheme.scene === "kitchen" && hasIsland(st.scheme.layout)))).map((c) => (
-        <button key={c.id} onClick={() => st.setCamera(c.id)} aria-pressed={st.camera === c.id} className={`h-9 whitespace-nowrap rounded-full px-3 text-[13px] ${st.camera === c.id ? "bg-porcelain text-ink" : "text-porcelain/85 hover:text-porcelain"}`}>
-          {c.label}
-        </button>
-      ))}
+        <span className="mx-0.5 h-5 w-px bg-white/15" />
+        <IconBtn onClick={st.undo} label="Undo">
+          {icon.undo}
+        </IconBtn>
+        <IconBtn onClick={st.redo} label="Redo">
+          {icon.redo}
+        </IconBtn>
+      </div>
+      {homeBar}
     </div>
   );
 
-  const night = st.mood === "night";
-  const anyOpen = Object.values(st.opened).some(Boolean);
-  const roomControls = (
+  const stageTopRight = (
     <div className="glass flex items-center gap-0.5 rounded-full p-1" role="group" aria-label="Room">
-      <button
-        onClick={() => st.setMood(night ? "morning" : "night")}
-        aria-label={night ? "Switch to daylight" : "Switch to night"}
-        title={night ? "Daylight" : "Night"}
-        className="flex h-9 items-center gap-1.5 rounded-full px-3 text-[13px] text-porcelain/90 hover:bg-white/10"
-      >
-        {night ? (
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
-            <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" />
-          </svg>
-        ) : (
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
-            <circle cx="12" cy="12" r="4" />
-            <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
-          </svg>
-        )}
-        <span className="hidden sm:inline">{night ? "Night" : "Day"}</span>
-      </button>
-      <button
-        onClick={() => st.setLights(!st.lightsOn)}
-        aria-pressed={st.lightsOn}
-        aria-label={st.lightsOn ? "Switch the lights off" : "Switch the lights on"}
-        title="Light switch"
-        className={`flex h-9 items-center gap-1.5 rounded-full px-3 text-[13px] transition-colors ${st.lightsOn ? "bg-champagne text-ink" : "text-porcelain/90 hover:bg-white/10"}`}
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill={st.lightsOn ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.7" aria-hidden>
-          <path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3Z" />
-        </svg>
-        <span className="hidden sm:inline">Lights</span>
-      </button>
-      <button
-        onClick={() => st.setOpenMode(!st.openMode)}
-        aria-pressed={st.openMode}
-        title="Tap any door or drawer to open it"
-        className={`flex h-9 items-center gap-1.5 rounded-full px-3 text-[13px] transition-colors ${st.openMode ? "bg-porcelain text-ink" : "text-porcelain/90 hover:bg-white/10"}`}
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
-          <path d="M4 3h9v18H4zM13 5l6 2v12l-6 2" />
-          <circle cx="10.5" cy="12" r=".8" fill="currentColor" />
-        </svg>
-        <span className="hidden sm:inline">Open doors</span>
-      </button>
+      <IconBtn onClick={() => st.setMood(night ? "morning" : "night")} label={night ? "Switch to daylight" : "Switch to night"} text={night ? "Night" : "Day"}>
+        {night ? icon.moon : icon.sun}
+      </IconBtn>
+      <IconBtn on={st.lightsOn} onClick={() => st.setLights(!st.lightsOn)} label={st.lightsOn ? "Switch the lights off" : "Switch the lights on"} text="Lights">
+        {icon.bulb(st.lightsOn)}
+      </IconBtn>
+      <IconBtn on={st.openMode} onClick={() => st.setOpenMode(!st.openMode)} label="Open doors and drawers" text="Open doors">
+        {icon.door}
+      </IconBtn>
       {anyOpen && (
-        <button onClick={st.closeAll} className="h-9 rounded-full px-3 text-[13px] text-porcelain/90 hover:bg-white/10">
+        <button onClick={st.closeAll} className="h-9 rounded-full px-2.5 text-[13px] text-porcelain/90 hover:bg-white/10">
           Close all
         </button>
       )}
+      <IconBtn on={st.comparing} onClick={toggleCompare} label={st.comparing ? "Exit compare" : "Compare design A and B"} text="Compare">
+        {icon.split}
+      </IconBtn>
     </div>
   );
 
-  const history = (
-    <div className="glass flex items-center rounded-full p-1">
-      <ToolButton onClick={st.undo} disabled={!st.past.length} label="Undo">
-        Undo
-      </ToolButton>
-      <ToolButton onClick={st.redo} disabled={!st.future.length} label="Redo">
-        Redo
-      </ToolButton>
-      <ToolButton onClick={st.reset} label="Reset scheme">
-        Reset
-      </ToolButton>
-      <ToolButton onClick={() => { st.copyToOther(); flash(`Design ${st.slot === "A" ? "B" : "A"} now starts from design ${st.slot}.`); }} label="Copy this design into the other slot">
-        Copy to {st.slot === "A" ? "B" : "A"}
-      </ToolButton>
-      <span className="h-5 w-px bg-white/15" />
-      {(["A", "B"] as const).map((d) => (
-        <button key={d} onClick={() => switchDesign(d)} aria-pressed={st.slot === d} title={`Edit design ${d}`} className={`h-9 rounded-full px-3 text-[13px] ${st.slot === d ? "bg-champagne text-ink" : "text-porcelain/85 hover:text-porcelain"}`}>
-          Design {d}
+  const cameraChips = (
+    <div className="glass no-scrollbar flex max-w-full items-center gap-0.5 overflow-x-auto rounded-full p-1">
+      {CAMERAS.filter((c) => (st.scheme.scene === "home" ? c.id === "detail" || c.id === "overview" : c.id !== "island" || (st.scheme.scene === "kitchen" && hasIsland(st.scheme.layout)))).map((c) => (
+        <button key={c.id} onClick={() => st.setCamera(c.id)} aria-pressed={st.camera === c.id} className={`h-9 shrink-0 whitespace-nowrap rounded-full px-3.5 text-[13px] transition-colors ${st.camera === c.id ? "bg-porcelain text-ink" : "text-porcelain/85 hover:text-porcelain"}`}>
+          {c.id === "overview" && st.scheme.scene === "home" ? "Dollhouse" : c.label}
         </button>
       ))}
-      <ToolButton onClick={toggleCompare} label={st.comparing ? "Exit compare" : "Compare design A and B side by side"}>
-        {st.comparing ? "Exit compare" : "Compare"}
-      </ToolButton>
-      <ToolButton onClick={() => setShowPalette((v) => !v)} label="Show palette">
-        Palette
-      </ToolButton>
+    </div>
+  );
+
+  // the selected surface, shown on the render like the reference's floating card
+  const selectedCard = activeFinish && (
+    <button onClick={() => setStep(1)} className="glass flex max-w-[min(340px,100%)] items-center gap-3 rounded-2xl p-2 pr-4 text-left">
+      <span className="h-11 w-11 shrink-0 overflow-hidden rounded-xl" style={{ background: activeFinish.hex }}>
+        {!activeFinish.flat && <img src={activeFinish.textures.thumb} alt="" className="h-full w-full object-cover" />}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-[12px] uppercase tracking-[0.14em] text-stone-light">{ZONE_LABEL[selected]}</span>
+        <span className="block truncate text-[14px] text-porcelain">{finishLabel(activeFinish)}</span>
+      </span>
+    </button>
+  );
+
+  const hint = st.scheme.scene === "home" && st.camera === "walk" ? "Drag to look around · W A S D or scroll to walk" : st.openMode ? "Click any door or drawer to open it · click the tap to run it" : "Drag to orbit · click a surface to change it · double-click a door to open it";
+
+  // ---- step contents ----
+  const SectionLabel = ({ children }: { children: React.ReactNode }) => <p className="mb-2.5 text-[12px] uppercase tracking-[0.16em] text-stone-light">{children}</p>;
+
+  const stepRoom = (
+    <div className="space-y-7">
+      <div>
+        <SectionLabel>Room</SectionLabel>
+        <div className="grid grid-cols-3 gap-2">
+          {(Object.keys(SCENE_LABEL) as SceneId[]).map((s) => (
+            <button key={s} onClick={() => st.setScene(s)} aria-pressed={st.scheme.scene === s} className={`rounded-xl px-3 py-3 text-left text-[13px] transition-colors ${st.scheme.scene === s ? "bg-porcelain text-ink" : "bg-white/[0.05] text-porcelain/85 hover:bg-white/10"}`}>
+              {SCENE_LABEL[s]}
+            </button>
+          ))}
+        </div>
+      </div>
+      {st.scheme.scene === "kitchen" && (
+        <div>
+          <SectionLabel>Layout</SectionLabel>
+          <div className="grid grid-cols-3 gap-2">
+            {(Object.keys(LAYOUT_LABEL) as KitchenLayout[]).map((l) => (
+              <button key={l} onClick={() => st.setLayout(l)} aria-pressed={st.scheme.layout === l} className={`rounded-xl px-3 py-3 text-left text-[13px] transition-colors ${st.scheme.layout === l ? "bg-porcelain text-ink" : "bg-white/[0.05] text-porcelain/85 hover:bg-white/10"}`}>
+                {LAYOUT_LABEL[l]}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      <div>
+        <SectionLabel>Start from a look</SectionLabel>
+        {designs}
+      </div>
+      <Link href="/studio/photo/" className="group flex items-center gap-4 rounded-2xl bg-champagne/10 p-4 ring-1 ring-champagne/40 transition-colors hover:bg-champagne/15">
+        <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-champagne text-ink">{icon.camera}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[15px] text-porcelain">Use a photo of your kitchen</span>
+          <span className="block text-[13px] text-stone-light">Snap your room and try our finishes on it, live.</span>
+        </span>
+        <span className="text-champagne transition-transform group-hover:translate-x-1">→</span>
+      </Link>
+    </div>
+  );
+
+  const stepSurfaces = (
+    <div className="flex min-h-0 flex-1 flex-col gap-5">
+      <div>
+        <SectionLabel>1 · Choose a surface</SectionLabel>
+        {zoneList}
+      </div>
+      <div className="flex min-h-[420px] flex-1 flex-col">
+        <SectionLabel>
+          2 · Finish for <span className="text-porcelain">{ZONE_LABEL[selected]}</span>
+        </SectionLabel>
+        <FinishDrawer activeId={activeFinish?.id} recent={st.recent} favourites={st.favourites} onPick={(f) => onPick(f.id)} onToggleFavourite={st.toggleFavourite} />
+      </div>
+      <div>
+        <SectionLabel>Quick moves</SectionLabel>
+        {presets}
+      </div>
+    </div>
+  );
+
+  const swatchCard = (on: boolean, onClick: () => void, name: string, bg: React.CSSProperties, sub?: string) => (
+    <button key={name} onClick={onClick} aria-pressed={on} className={`group overflow-hidden rounded-xl text-left transition-[box-shadow,transform] ${on ? "ring-2 ring-champagne" : "ring-1 ring-white/10 hover:ring-white/30"}`}>
+      <span className="block h-14 w-full transition-transform duration-500 group-hover:scale-105" style={bg} />
+      <span className="block bg-white/[0.04] px-2.5 py-2">
+        <span className="block truncate text-[13px] text-porcelain">{name}</span>
+        {sub && <span className="block truncate text-[12px] text-stone-light">{sub}</span>}
+      </span>
+    </button>
+  );
+  const FLOOR_BG: React.CSSProperties[] = [
+    { background: "repeating-linear-gradient(90deg,#b9a389 0 22px,#a68f74 22px 23px,#c2ad93 23px 45px,#9f876b 45px 46px)" },
+    { background: "radial-gradient(circle at 30% 40%,#a49e96,#8f8a83)" },
+    { background: "linear-gradient(90deg,#3a3936 0 49%,#2a2927 49% 51%,#403f3b 51%)" },
+    { background: "linear-gradient(#eeede9,#eeede9) padding-box, repeating-linear-gradient(90deg,transparent 0 47px,#cfccc6 47px 49px), repeating-linear-gradient(0deg,#eeede9 0 26px,#cfccc6 26px 28px)" },
+    { backgroundImage: `url(${asset("/tex/calacatta-bianco.jpg")})`, backgroundSize: "cover" },
+    { background: "repeating-linear-gradient(45deg,#b48a5e 0 12px,#a27a50 12px 13px,#c09669 13px 25px,#9c744b 25px 26px), #b48a5e" },
+  ];
+  const stepWorktop = (
+    <div className="space-y-7">
+      <div>
+        <SectionLabel>Worktop</SectionLabel>
+        <div className="grid grid-cols-3 gap-2">{STAGING.worktops.map((o, i) => swatchCard(st.scheme.worktop === i, () => st.setOption("worktop", i as 0), o.name, { background: o.color }))}</div>
+      </div>
+      <div>
+        <SectionLabel>Floor</SectionLabel>
+        <div className="grid grid-cols-3 gap-2">{STAGING.floors.map((o, i) => swatchCard(st.scheme.floor === i, () => st.setOption("floor", i as 0), o.name, FLOOR_BG[i] ?? { background: o.color }))}</div>
+      </div>
+      <div>
+        <SectionLabel>Walls</SectionLabel>
+        <div className="grid grid-cols-3 gap-2">{STAGING.walls.map((o, i) => swatchCard(st.scheme.wall === i, () => st.setOption("wall", i as 0), o.name, { background: o.color }))}</div>
+      </div>
+      <div>
+        <SectionLabel>Handles</SectionLabel>
+        <div className="flex flex-wrap gap-1.5">
+          {STAGING.handles.map((h) => (
+            <Chip key={h.id} active={st.scheme.handle === h.id} onClick={() => st.setOption("handle", h.id)}>
+              {h.name.replace("Slim bar, ", "Bar, ")}
+            </Chip>
+          ))}
+        </div>
+      </div>
+      <p className="text-[12px] leading-relaxed text-stone-light">Worktop, floor, walls and handles are visual staging to show the boards in context. UnipanelSA supplies the boards and panels.</p>
+    </div>
+  );
+
+  const MOOD_ORDER: Mood[] = ["morning", "golden", "evening", "night", "gallery"];
+  const MOOD_BG: Record<Mood, string> = {
+    morning: "linear-gradient(135deg,#dfe9f5,#fff6e2)",
+    golden: "linear-gradient(135deg,#f6c486,#c9784a)",
+    evening: "linear-gradient(135deg,#6b4a33,#2a1d14)",
+    night: "linear-gradient(135deg,#1b2638,#05070a)",
+    gallery: "linear-gradient(135deg,#f4f4f2,#cfcfcb)",
+  };
+  const stepLight = (
+    <div className="space-y-7">
+      <div>
+        <SectionLabel>Time of day</SectionLabel>
+        <div className="grid grid-cols-2 gap-2">
+          {MOOD_ORDER.map((m) => (
+            <button key={m} onClick={() => st.setMood(m)} aria-pressed={st.mood === m} className={`overflow-hidden rounded-xl text-left ${st.mood === m ? "ring-2 ring-champagne" : "ring-1 ring-white/10 hover:ring-white/30"}`}>
+              <span className="block h-12" style={{ background: MOOD_BG[m] }} />
+              <span className="block bg-white/[0.04] px-3 py-2 text-[13px] text-porcelain">{MOODS[m].label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="flex items-center justify-between rounded-2xl bg-white/[0.05] p-4">
+        <div>
+          <p className="text-[15px] text-porcelain">Room lights</p>
+          <p className="text-[13px] text-stone-light">Downlights, LED strips and pendants. Or click the switch on the wall.</p>
+        </div>
+        <button onClick={() => st.setLights(!st.lightsOn)} role="switch" aria-checked={st.lightsOn} aria-label="Room lights" className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${st.lightsOn ? "bg-champagne" : "bg-white/20"}`}>
+          <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-[left] ${st.lightsOn ? "left-6" : "left-1"}`} />
+        </button>
+      </div>
+      <div className="flex items-center justify-between rounded-2xl bg-white/[0.05] p-4">
+        <div>
+          <p className="text-[15px] text-porcelain">Open doors & drawers</p>
+          <p className="text-[13px] text-stone-light">Click any front to open it and see inside. Click the tap to run it.</p>
+        </div>
+        <button onClick={() => st.setOpenMode(!st.openMode)} role="switch" aria-checked={st.openMode} aria-label="Open doors mode" className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${st.openMode ? "bg-champagne" : "bg-white/20"}`}>
+          <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-[left] ${st.openMode ? "left-6" : "left-1"}`} />
+        </button>
+      </div>
+      <div>
+        <SectionLabel>Board details</SectionLabel>
+        <div className="space-y-3 text-[13px]">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="w-20 text-stone-light">Grain</span>
+            <Chip active={st.scheme.grain === "v"} onClick={() => st.setOption("grain", "v")}>
+              Vertical
+            </Chip>
+            <Chip active={st.scheme.grain === "h"} onClick={() => st.setOption("grain", "h")}>
+              Horizontal
+            </Chip>
+            <Chip active={st.scheme.bookmatch} onClick={() => st.setOption("bookmatch", !st.scheme.bookmatch)}>
+              Bookmatch {st.scheme.bookmatch ? "on" : "off"}
+            </Chip>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="w-20 text-stone-light">Build-up</span>
+            {([36, 42, 48, 54] as const).map((t) => (
+              <Chip key={t} active={st.scheme.buildup === t} onClick={() => st.setOption("buildup", t)}>
+                {t}mm
+              </Chip>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  const stepDone = (
+    <div className="space-y-7">
+      {palette}
+      {actions}
+      <div className="flex flex-wrap gap-2 text-[13px]">
+        <button onClick={() => { st.copyToOther(); flash(`Design ${st.slot === "A" ? "B" : "A"} now starts from design ${st.slot}.`); }} className="text-stone-light underline-offset-4 hover:text-porcelain hover:underline">
+          Copy to design {st.slot === "A" ? "B" : "A"}
+        </button>
+        <span className="text-white/20">·</span>
+        <button onClick={st.reset} className="text-stone-light underline-offset-4 hover:text-porcelain hover:underline">
+          Reset design
+        </button>
+      </div>
+    </div>
+  );
+
+  const stepBody = [stepRoom, stepSurfaces, stepWorktop, stepLight, stepDone][step];
+
+  const stepper = (
+    <div>
+      <div className="flex items-center justify-between">
+        <p className="text-[12px] uppercase tracking-[0.16em] text-stone-light">
+          Step {step + 1} of {STEPS.length}
+        </p>
+        <p className="text-[12px] text-stone-light">{STEPS[step].label}</p>
+      </div>
+      <div className="mt-2.5 grid grid-cols-5 gap-1" role="tablist" aria-label="Studio steps">
+        {STEPS.map((s, i) => (
+          <button key={s.id} role="tab" aria-selected={step === i} aria-label={s.label} onClick={() => setStep(i)} className="group py-1.5">
+            <span className={`block h-1 rounded-full transition-colors ${i <= step ? "bg-champagne" : "bg-white/15 group-hover:bg-white/30"}`} />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  const usedDots = (
+    <div className="flex items-center -space-x-1.5">
+      {usedFinishes(st.scheme)
+        .slice(0, mobile ? 4 : 6)
+        .map((u) => (
+          <span key={u.zone} title={`${u.label}: ${u.finish.name}`} className="h-7 w-7 overflow-hidden rounded-full ring-2 ring-[#161615]" style={{ background: u.finish.hex }}>
+            {!u.finish.flat && <img src={u.finish.textures.thumb} alt="" className="h-full w-full object-cover" />}
+          </span>
+        ))}
+    </div>
+  );
+
+  const footer = (
+    <div className="flex items-center gap-3 border-t border-white/8 bg-[#141413] px-5 py-3.5">
+      {usedDots}
+      <div className="ml-auto flex items-center gap-2">
+        {step > 0 && (
+          <button onClick={() => setStep(step - 1)} className="h-11 rounded-full px-4 text-[14px] text-porcelain/85 ring-1 ring-white/15 hover:ring-white/40">
+            Back
+          </button>
+        )}
+        {step < STEPS.length - 1 ? (
+          <button onClick={() => setStep(step + 1)} className="h-11 whitespace-nowrap rounded-full bg-porcelain px-5 text-[14px] font-medium text-ink hover:bg-champagne">
+            {mobile ? "Next" : `Next: ${STEPS[step + 1].label}`}
+          </button>
+        ) : (
+          <Link href={`/contact/?type=studio&s=${encodeScheme(st.scheme)}`} className="grid h-11 place-items-center rounded-full bg-champagne px-5 text-[14px] font-medium text-ink">
+            Send to showroom
+          </Link>
+        )}
+      </div>
     </div>
   );
 
@@ -671,7 +943,7 @@ export default function StudioApp() {
           onHover={onHover}
           onSelect={(z) => {
             st.select(z);
-            if (mobile && sheet === "peek") setSheet("half");
+            setStep(1);
           }}
           lightsOn={st.lightsOn}
           onLights={() => st.setLights(!st.lightsOn)}
@@ -750,124 +1022,87 @@ export default function StudioApp() {
   );
 
   if (mobile) {
-    const heights = { peek: 236, half: 0.56, full: 0.9 };
-    const h = sheet === "peek" ? `${heights.peek}px` : `${heights[sheet] * 100}dvh`;
+    // phone: the render on top, a step-by-step wizard below (like a guided configurator)
     return (
-      <div className="fixed inset-0 bg-ink pt-[var(--nav-h)] text-porcelain">
+      <div className="fixed inset-0 flex flex-col bg-ink pt-[var(--nav-h)] text-porcelain">
         {live}
         {toastEl}
         {sheetModal}
-        <div className="absolute inset-0 top-[var(--nav-h)]">{stage}</div>
-        <div className="absolute left-0 right-0 top-[calc(var(--nav-h)+8px)] z-10 flex flex-col gap-2 px-3">
-          <div className="no-scrollbar -mx-3 flex gap-2 overflow-x-auto px-3">
-            <div className="glass shrink-0 rounded-full p-1">
-              <label htmlFor="m-scene" className="sr-only">
-                Scene
-              </label>
-              <select id="m-scene" value={st.scheme.scene} onChange={(e) => st.setScene(e.target.value as SceneId)} className="h-9 rounded-full bg-transparent px-3 text-[13px] text-porcelain focus:outline-none">
-                {(Object.keys(SCENE_LABEL) as SceneId[]).map((sc) => (
-                  <option key={sc} value={sc} className="bg-ink">
-                    {SCENE_LABEL[sc]}
-                  </option>
-                ))}
-              </select>
+        <div className="relative h-[46dvh] shrink-0 overflow-hidden">
+          {stage}
+          <div className="absolute inset-x-3 top-3 z-10 flex items-start justify-between gap-2">
+            {stageTopLeft}
+            <div className="glass flex items-center gap-0.5 rounded-full p-1">
+              <IconBtn onClick={() => st.setMood(night ? "morning" : "night")} label={night ? "Switch to daylight" : "Switch to night"}>
+                {night ? icon.moon : icon.sun}
+              </IconBtn>
+              <IconBtn on={st.lightsOn} onClick={() => st.setLights(!st.lightsOn)} label="Room lights">
+                {icon.bulb(st.lightsOn)}
+              </IconBtn>
+              <IconBtn on={st.openMode} onClick={() => st.setOpenMode(!st.openMode)} label="Open doors and drawers">
+                {icon.door}
+              </IconBtn>
             </div>
-            {homeBar && <div className="shrink-0">{homeBar}</div>}
-            <div className="shrink-0">{viewControls}</div>
-            <div className="shrink-0">{roomControls}</div>
-            <div className="shrink-0">{history}</div>
           </div>
+          <div className="absolute inset-x-3 bottom-3 z-10 flex justify-center">{cameraChips}</div>
         </div>
-        <section
-          aria-label="Studio controls"
-          className="glass absolute inset-x-0 bottom-0 z-20 flex flex-col rounded-t-3xl px-4 pb-[max(env(safe-area-inset-bottom),12px)] transition-[height] duration-300 ease-[cubic-bezier(.22,1,.36,1)]"
-          style={{ height: h }}
-        >
-          <button
-            className="mx-auto flex h-7 w-full items-center justify-center"
-            aria-label={sheet === "full" ? "Collapse controls" : "Expand controls"}
-            onClick={() => setSheet(sheet === "peek" ? "half" : sheet === "half" ? "full" : "peek")}
-            onTouchStart={(e) => ((e.currentTarget as HTMLElement).dataset.y = String(e.touches[0].clientY))}
-            onTouchEnd={(e) => {
-              const y0 = Number((e.currentTarget as HTMLElement).dataset.y);
-              const dy = e.changedTouches[0].clientY - y0;
-              if (dy < -30) setSheet(sheet === "peek" ? "half" : "full");
-              else if (dy > 30) setSheet(sheet === "full" ? "half" : "peek");
-            }}
-          >
-            <span className="h-1 w-10 rounded-full bg-white/30" />
-          </button>
-          <div className="no-scrollbar -mx-4 flex gap-1.5 overflow-x-auto px-4 pb-2" role="radiogroup" aria-label="Surface zone">
-            {zones.map((z) => (
-              <Chip key={z} active={selected === z} onClick={() => st.select(z)}>
-                {ZONE_LABEL[z]}
-              </Chip>
-            ))}
+        <section aria-label="Studio controls" className="flex min-h-0 flex-1 flex-col rounded-t-3xl bg-[#161615] shadow-[0_-20px_40px_rgba(0,0,0,.4)]">
+          <div className="px-5 pt-4">
+            {stepper}
+            <h2 className="display mt-3 text-[26px] leading-tight">{STEPS[step].title}</h2>
           </div>
-          {sheet === "peek" ? (
-            <FinishDrawer layout="carousel" bare activeId={activeFinish?.id} recent={st.recent} favourites={st.favourites} onPick={(f) => onPick(f.id)} onToggleFavourite={st.toggleFavourite} />
-          ) : (
-            <div className="no-scrollbar min-h-0 flex-1 space-y-6 overflow-y-auto pb-8">
-              <FinishDrawer layout={sheet === "half" ? "carousel" : "grid"} activeId={activeFinish?.id} recent={st.recent} favourites={st.favourites} onPick={(f) => onPick(f.id)} onToggleFavourite={st.toggleFavourite} />
-              {sceneControls}
-              {designs}
-              {presets}
-              {options}
-              {palette}
-              {actions}
+          <div className="no-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-6 pt-4">{step === 1 ? <div className="flex flex-col gap-5">
+            <div className="no-scrollbar -mx-5 flex gap-1.5 overflow-x-auto px-5" role="radiogroup" aria-label="Surface zone">
+              {zones.map((z) => (
+                <Chip key={z} active={selected === z} onClick={() => st.select(z)}>
+                  {ZONE_LABEL[z]}
+                </Chip>
+              ))}
             </div>
-          )}
+            <div className="flex h-[420px] flex-col">
+              <FinishDrawer layout="grid" activeId={activeFinish?.id} recent={st.recent} favourites={st.favourites} onPick={(f) => onPick(f.id)} onToggleFavourite={st.toggleFavourite} />
+            </div>
+            {presets}
+          </div> : stepBody}</div>
+          <div className="pb-[max(env(safe-area-inset-bottom),0px)]">{footer}</div>
         </section>
       </div>
     );
   }
 
   return (
-    <div className="fixed inset-0 flex bg-ink pt-[var(--nav-h)] text-porcelain">
+    <div className="fixed inset-0 flex gap-3 bg-[#0b0b0a] p-3 pt-[calc(var(--nav-h)+12px)] text-porcelain">
       {live}
       {toastEl}
       {sheetModal}
-      <div className="relative min-w-0 flex-1">
+      {/* the render, framed */}
+      <div className="relative min-w-0 flex-1 overflow-hidden rounded-[22px] ring-1 ring-white/8">
         {stage}
-        <div className="absolute left-4 top-4 z-10 flex flex-wrap gap-2">
-          {viewControls}
-          {roomControls}
-          {history}
-          {homeBar}
+        <div className="pointer-events-none absolute inset-x-4 top-4 z-10 flex items-start justify-between gap-3 [&>*]:pointer-events-auto">
+          {stageTopLeft}
+          {stageTopRight}
         </div>
-        <p className="caption pointer-events-none absolute bottom-4 right-4 text-stone-light">
-          {st.scheme.scene === "home" && st.camera === "walk" ? "Drag to look around · W A S D, arrow keys or scroll to walk · click a surface to select it" : st.openMode ? "Click any door or drawer to open it · click the tap to run it" : "Drag to orbit · scroll to zoom · click a surface to select it · double-click a door to open it"}
-        </p>
+        {/* bottom-left: the selected surface and the camera views; bottom-right stays clear for the concierge */}
+        <div className="pointer-events-none absolute bottom-4 left-4 right-48 z-10 flex flex-col items-start gap-2 [&>*]:pointer-events-auto">
+          {selectedCard}
+          {cameraChips}
+          <p className="caption pointer-events-none hidden pl-2 text-[12px] text-porcelain/55 2xl:block">{hint}</p>
+        </div>
       </div>
-      <aside aria-label="Studio controls" className="flex w-[440px] shrink-0 flex-col border-l border-white/8 bg-[#191917]">
-        <div className="no-scrollbar flex-1 space-y-6 overflow-y-auto p-5">
-          <div>
-            <p className="eyebrow text-champagne">The Studio</p>
-            <h1 className="display mt-2 text-[40px]">Your kitchen, before it exists.</h1>
-          </div>
-          {sceneControls}
-          <div>
-            <p className="eyebrow mb-2 text-stone-light">01 · Choose a surface</p>
-            {zoneList}
-          </div>
-          <div className="flex h-[560px] flex-col">
-            <p className="eyebrow mb-2 text-stone-light">
-              02 · Apply a finish to <span className="text-porcelain">{ZONE_LABEL[selected]}</span>
-            </p>
-            <FinishDrawer activeId={activeFinish?.id} recent={st.recent} favourites={st.favourites} onPick={(f) => onPick(f.id)} onToggleFavourite={st.toggleFavourite} />
-          </div>
-          <div>
-            <p className="eyebrow mb-2 text-stone-light">03 · Designs</p>
-            {designs}
-            <div className="mt-3">{presets}</div>
-          </div>
-          <div>
-            <p className="eyebrow mb-2 text-stone-light">04 · Details</p>
-            {options}
-          </div>
-          {palette}
+      {/* the guided panel */}
+      <aside aria-label="Studio controls" className="flex w-[420px] shrink-0 flex-col overflow-hidden rounded-[22px] bg-[#161615] ring-1 ring-white/8">
+        <div className="px-6 pt-6">
+          <p className="eyebrow text-champagne">The Studio</p>
+          <h1 className="display mt-2 text-[34px] leading-[1.05]">
+            Design your kitchen <em className="display-italic text-stone-light">live.</em>
+          </h1>
+          <div className="mt-5">{stepper}</div>
         </div>
-        <div className="border-t border-white/8 p-4">{actions}</div>
+        <div className="no-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto px-6 pb-6 pt-5">
+          <h2 className="mb-4 text-[18px] text-porcelain">{STEPS[step].title}</h2>
+          {stepBody}
+        </div>
+        {footer}
       </aside>
     </div>
   );

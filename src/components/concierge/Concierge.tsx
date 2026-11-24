@@ -328,7 +328,7 @@ export function Concierge() {
         aria-controls="concierge"
         aria-label="Ask Unipanel, open the concierge chat"
         className={`group fixed z-[55] flex h-14 items-center gap-3 rounded-full bg-ink p-1.5 text-[14px] text-porcelain shadow-[0_14px_40px_rgba(0,0,0,.35)] ring-1 ring-white/12 transition-[transform,opacity,box-shadow] duration-300 hover:-translate-y-0.5 hover:shadow-[0_18px_50px_rgba(0,0,0,.45)] sm:pr-5 ${
-          path?.startsWith("/studio") ? "bottom-[250px] right-4 lg:bottom-5 lg:right-[460px]" : "bottom-5 right-5"
+          path?.startsWith("/studio") ? "max-lg:hidden lg:bottom-7 lg:right-[456px]" : "bottom-5 right-5"
         } ${open ? "pointer-events-none translate-y-4 opacity-0" : ""}`}
       >
         <span className="relative grid h-11 w-11 place-items-center rounded-full bg-[#1d1d1b] ring-1 ring-champagne/40">

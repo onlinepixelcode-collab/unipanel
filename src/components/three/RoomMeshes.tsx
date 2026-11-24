@@ -602,7 +602,7 @@ function CursorReset({ gl }: { gl: THREE.WebGLRenderer }) {
  * white porcelain 600mm tiles and polished marble slabs cut from a real marble scan.
  * Each texture covers FLOOR_TILE[kind] metres.
  */
-const FLOOR_TILE = [2, 3, 1.8, 1.2, 1.2];
+const FLOOR_TILE = [2, 3, 1.8, 1.2, 1.2, 0.56];
 const floorTexCache = new Map<string, THREE.CanvasTexture>();
 let marbleImg: HTMLImageElement | null = null;
 function loadMarble(): Promise<HTMLImageElement> {
@@ -713,6 +713,43 @@ function floorTexture(kind: number, base: string) {
       }
     }
   }
+  if (kind === 5) {
+    // oak herringbone: 70 × 280mm blocks; the pattern repeats every 2 block lengths (560mm)
+    const L = size / 2;
+    const w = L / 4;
+    g.fillStyle = "#6e5236";
+    g.fillRect(0, 0, size, size);
+    const plank = (x: number, y: number, pw: number, ph: number, horiz: boolean) => {
+      const k = 0.86 + rnd() * 0.26;
+      g.fillStyle = shade(k);
+      g.fillRect(x + 1, y + 1, pw - 2, ph - 2);
+      // grain along the block
+      for (let n = 0; n < 9; n++) {
+        g.strokeStyle = `rgba(70,45,22,${0.05 + rnd() * 0.08})`;
+        g.lineWidth = 1 + rnd();
+        g.beginPath();
+        if (horiz) {
+          const yy = y + 2 + rnd() * (ph - 4);
+          g.moveTo(x + 2, yy);
+          g.bezierCurveTo(x + pw * 0.3, yy + (rnd() - 0.5) * 6, x + pw * 0.7, yy + (rnd() - 0.5) * 6, x + pw - 2, yy);
+        } else {
+          const xx = x + 2 + rnd() * (pw - 4);
+          g.moveTo(xx, y + 2);
+          g.bezierCurveTo(xx + (rnd() - 0.5) * 6, y + ph * 0.3, xx + (rnd() - 0.5) * 6, y + ph * 0.7, xx, y + ph - 2);
+        }
+        g.stroke();
+      }
+    };
+    for (let m = -4; m <= 4; m++)
+      for (let n = -12; n <= 16; n++) {
+        const hx = n * w + m * L;
+        const hy = n * w - m * L;
+        if (hx > -L && hx < size && hy > -L && hy < size) plank(hx, hy, L, w, true);
+        const vx = hx + L;
+        const vy = hy + w - L;
+        if (vx > -L && vx < size && vy > -L && vy < size) plank(vx, vy, w, L, false);
+      }
+  }
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
@@ -738,6 +775,11 @@ function Floor({ kind, w, d, cx, cz, shadows, reflect }: { kind: number; w: numb
     const m = tex.clone();
     m.needsUpdate = true;
     m.repeat.set(w / tile, d / tile);
+    if (kind === 5) {
+      // herringbone is laid at 45° so the zigzag runs along the room
+      m.center.set(0.5, 0.5);
+      m.rotation = Math.PI / 4;
+    }
     return m;
   }, [tex, w, d, tile]);
   useEffect(() => {
@@ -750,8 +792,8 @@ function Floor({ kind, w, d, cx, cz, shadows, reflect }: { kind: number; w: numb
       new THREE.MeshPhysicalMaterial({
         map,
         color: kind >= 3 ? "#dcdad5" : "#ffffff",
-        roughness: kind === 4 ? 0.12 : kind === 3 ? 0.22 : kind === 2 ? 0.5 : 0.62,
-        clearcoat: kind === 4 ? 0.8 : kind === 3 ? 0.5 : kind === 0 ? 0.15 : 0,
+        roughness: kind === 4 ? 0.12 : kind === 3 ? 0.22 : kind === 2 ? 0.5 : kind === 5 ? 0.5 : 0.62,
+        clearcoat: kind === 4 ? 0.8 : kind === 3 ? 0.5 : kind === 0 ? 0.15 : kind === 5 ? 0.3 : 0,
         clearcoatRoughness: kind >= 3 ? 0.06 : 0.5,
       }),
     [map, kind],
@@ -995,7 +1037,7 @@ function SingleRoomShell({ room, scheme, shadows = true, lightsOn = false, night
         <planeGeometry args={[room.walls.left || room.walls.right ? W : W + 6, H]} />
       </mesh>
       {/* ceiling: faces down, so it is invisible when orbiting above the room */}
-      <mesh position={[0, H, D / 2 - 0.5]} rotation={[Math.PI / 2, 0, 0]} material={ceiling}>
+      <mesh position={[0, H, D / 2 - 0.5]} rotation={[Math.PI / 2, 0, 0]} material={ceiling} castShadow={shadows}>
         <planeGeometry args={[room.walls.left || room.walls.right ? W : W + 6, D + 1]} />
       </mesh>
       {lights.map(([x, z], i) => (
@@ -1021,7 +1063,7 @@ function SingleRoomShell({ room, scheme, shadows = true, lightsOn = false, night
           [0.77, 0, 0.05, 1.29],
           [0, 0, 0.03, 1.2],
         ].map(([x, y, w, h], i) => (
-          <mesh key={i} position={[x, y, 0.012]} material={frame}>
+          <mesh key={i} position={[x, y, 0.012]} material={frame} castShadow={shadows}>
             <boxGeometry args={[w, h, 0.025]} />
           </mesh>
         ))}
@@ -1047,9 +1089,24 @@ function SingleRoomShell({ room, scheme, shadows = true, lightsOn = false, night
         </mesh>
       )}
       {room.walls.right && (
-        <mesh position={[W / 2 - 0.3, H / 2, D / 2]} rotation={[0, -Math.PI / 2, 0]} receiveShadow={shadows} material={wall}>
-          <planeGeometry args={[D, H]} />
-        </mesh>
+        // built around the window opening and casting shadows, so sunlight only enters through the glass
+        <group position={[W / 2 - 0.3, 0, 0]} rotation={[0, -Math.PI / 2, 0]}>
+          {(() => {
+            const z0 = winZ - 0.75, z1 = winZ + 0.75, y0 = 1.15, y1 = 2.35;
+            // after the -90° turn, wall-local x runs along the room's +z
+            const segs: [number, number, number, number][] = [
+              [0, z0, 0, H],
+              [z1, D, 0, H],
+              [z0, z1, 0, y0],
+              [z0, z1, y1, H],
+            ];
+            return segs.map(([a, b, c, d], i) => (
+              <mesh key={i} position={[(a + b) / 2, (c + d) / 2, 0]} receiveShadow={shadows} castShadow={shadows} material={wall}>
+                <planeGeometry args={[b - a, d - c]} />
+              </mesh>
+            ));
+          })()}
+        </group>
       )}
     </group>
   );

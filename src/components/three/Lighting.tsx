@@ -13,8 +13,8 @@ import type { Mood } from "@/lib/studio/scheme";
 export const MOODS: Record<Mood, { label: string; key: string; fill: string; keyIntensity: number; env: number; hemi: number; sun: [number, number, number]; bg: string; exposure: number; night?: boolean }> = {
   gallery: { label: "Gallery", key: "#ffffff", fill: "#f6f6f4", keyIntensity: 3, env: 1.05, hemi: 0.18, sun: [2.2, 4.6, 4.2], bg: "#0e0e0d", exposure: 1.18 },
   // daylight: a stronger, lower sun with less fill so cast shadows read clearly
-  morning: { label: "Daylight", key: "#fff8ee", fill: "#e8eef7", keyIntensity: 4.6, env: 0.85, hemi: 0.1, sun: [4.2, 4.4, 3.4], bg: "#121417", exposure: 1.15 },
-  golden: { label: "Golden hour", key: "#ffc58a", fill: "#ffe4c6", keyIntensity: 4.2, env: 0.7, hemi: 0.1, sun: [5.5, 1.9, 2.6], bg: "#15100b", exposure: 1.1 },
+  morning: { label: "Daylight", key: "#fff6e8", fill: "#e8eef7", keyIntensity: 5.2, env: 1.1, hemi: 0.24, sun: [6.2, 3.6, 1.1], bg: "#121417", exposure: 1.15 },
+  golden: { label: "Golden hour", key: "#ffc180", fill: "#ffe4c6", keyIntensity: 4.6, env: 0.85, hemi: 0.2, sun: [6.4, 2.1, 0.9], bg: "#15100b", exposure: 1.1 },
   evening: { label: "Evening 2700K", key: "#ffbd7a", fill: "#ffdab0", keyIntensity: 1.2, env: 0.4, hemi: 0.12, sun: [0.5, 2.6, 2.5], bg: "#0b0907", exposure: 1 },
   // night: faint blue moonlight through the window; the room's own lights do the work
   night: { label: "Night", key: "#8ea6d0", fill: "#5d6b85", keyIntensity: 0.28, env: 0.07, hemi: 0.04, sun: [5, 3.2, 1.6], bg: "#05070a", exposure: 1.05, night: true },

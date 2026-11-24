@@ -28,7 +28,7 @@ export interface Scheme {
   bookmatch: boolean;
   buildup: 36 | 42 | 48 | 54;
   handle: HandleStyle;
-  floor: 0 | 1 | 2 | 3 | 4;
+  floor: 0 | 1 | 2 | 3 | 4 | 5;
   wall: 0 | 1 | 2;
   worktop: 0 | 1 | 2;
 }
@@ -95,6 +95,7 @@ export const STAGING = {
     { name: "Dark slate", color: "#3a3936" },
     { name: "White porcelain tile", color: "#eeede9" },
     { name: "Polished marble", color: "#ecebe7" },
+    { name: "Oak herringbone", color: "#b48a5e" },
   ],
   walls: [
     { name: "Gallery white", color: "#efeeeb" },
@@ -189,7 +190,7 @@ export function decodeScheme(code: string | null | undefined): Scheme | null {
       bookmatch: !!n(4),
       buildup: BUILDUPS[n(5)] ?? 42,
       handle: HANDLES[n(6)] ?? "jprofile",
-      floor: (Math.min(4, Math.max(0, n(7))) || 0) as 0,
+      floor: (Math.min(5, Math.max(0, n(7))) || 0) as 0,
       wall: (Math.min(2, Math.max(0, n(8))) || 0) as 0,
       worktop: (Math.min(2, Math.max(0, n(9))) || 0) as 0,
       zones,
@@ -211,7 +212,7 @@ export interface DesignPreset {
   note: string;
   zones: Partial<Record<Zone, string>>;
   handle: HandleStyle;
-  floor: 0 | 1 | 2 | 3 | 4;
+  floor: 0 | 1 | 2 | 3 | 4 | 5;
   wall: 0 | 1 | 2;
   worktop: 0 | 1 | 2;
 }
