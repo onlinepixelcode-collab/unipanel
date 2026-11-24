@@ -5,6 +5,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { RectAreaLightUniformsLib } from "three/examples/jsm/lights/RectAreaLightUniformsLib.js";
 import type { RoomSpec } from "@/lib/studio/layout";
 import { downlightPoints } from "./RoomMeshes";
+import { homePlan } from "@/lib/studio/homePlan";
 import type { Tier } from "./quality";
 
 const MM = 0.001;
@@ -28,9 +29,9 @@ export function RoomLights({ room, on, tier, homeRoom = 0 }: { room: RoomSpec; o
     let pts = downlightPoints(room);
     if (room.rooms) {
       // whole home: two per room, but the full set in the room being viewed
-      const r = room.rooms[Math.min(homeRoom, room.rooms.length - 1)];
-      const inRoom = pts.filter(([x]) => x > r.x0 * MM && x < r.x1 * MM);
-      const others = room.rooms.filter((q) => q !== r).flatMap((q) => [[((q.x0 + q.x1) / 2) * MM, 1.6] as [number, number]]);
+      const r = room.rooms[Math.max(0, Math.min(homeRoom, room.rooms.length - 1))];
+      const inRoom = pts.filter(([x, z]) => x > r.x0 * MM && x < r.x1 * MM && z > r.z0 * MM && z < r.z1 * MM);
+      const others = room.rooms.filter((q) => q !== r).flatMap((q) => [[((q.x0 + q.x1) / 2) * MM, ((q.z0 + q.z1) / 2) * MM] as [number, number]]);
       pts = [...inRoom.slice(0, tier === 2 ? 6 : 4), ...others];
     } else {
       const budget = tier === 2 ? 8 : tier === 1 ? 5 : 3;
@@ -116,5 +117,66 @@ function Spot({ x, y, z, shadow, size }: { x: number; y: number; z: number; shad
         shadow-camera-far={6}
       />
     </>
+  );
+}
+
+/**
+ * Daylight through the windows: each window is a soft area light shining into the room,
+ * coloured by the time of day. This is what makes rooms bright by the glass and dimmer
+ * deeper in, the way real interiors read.
+ */
+const WINDOW_LIGHT: Record<string, { color: string; base: number }> = {
+  gallery: { color: "#f4f6fa", base: 3 },
+  morning: { color: "#eaf1ff", base: 9 },
+  golden: { color: "#ffc98e", base: 7 },
+  evening: { color: "#c9a07a", base: 1.0 },
+  night: { color: "#6f86b0", base: 0.35 },
+};
+export function WindowLights({ room, mood }: { room: RoomSpec; mood: string }) {
+  if (!rectInit) {
+    RectAreaLightUniformsLib.init();
+    rectInit = true;
+  }
+  const { invalidate } = useThree();
+  const panes = useMemo(() => {
+    const plan = homePlan(room);
+    if (plan) {
+      const cx = (plan.box.x0 + plan.box.x1) / 2, cz = (plan.box.z0 + plan.box.z1) / 2;
+      return plan.windows.map((w) => {
+        // face the light into the house
+        // a rect light shines along its -z: turn it to face into the house
+        const inward = w.axis === "x" ? (w.z > cz ? 0 : Math.PI) : w.x > cx ? Math.PI / 2 : -Math.PI / 2;
+        const off = 0.08;
+        const x = w.axis === "z" ? w.x + (w.x > cx ? -off : off) : w.x;
+        const z = w.axis === "x" ? w.z + (w.z > cz ? -off : off) : w.z;
+        return { x, y: (w.y0 + w.y1) / 2, z, w: w.w, h: w.y1 - w.y0, rot: inward };
+      });
+    }
+    if (room.rooms) return [];
+    // single room: the window on the right wall
+    const W = room.bounds.width * MM + 0.6, D = room.bounds.depth * MM;
+    return room.walls.right ? [{ x: W / 2 - 0.3 - 0.08, y: 1.75, z: Math.min(D * 0.6, 3.1), w: 1.5, h: 1.2, rot: Math.PI / 2 }] : [];
+  }, [room]);
+  const cfg = WINDOW_LIGHT[mood] ?? WINDOW_LIGHT.morning;
+  const group = useRef<THREE.Group>(null);
+  const color = useRef(new THREE.Color(cfg.color));
+  useFrame((_, dt) => {
+    const k = 1 - Math.exp(-dt * 4);
+    let moving = false;
+    group.current?.children.forEach((o) => {
+      const l = o as THREE.RectAreaLight;
+      if (Math.abs(l.intensity - cfg.base) > 0.01) moving = true;
+      l.intensity += (cfg.base - l.intensity) * k;
+      color.current.set(cfg.color);
+      l.color.lerp(color.current, k);
+    });
+    if (moving) invalidate();
+  });
+  return (
+    <group ref={group}>
+      {panes.map((p, i) => (
+        <rectAreaLight key={i} args={[cfg.color, cfg.base, p.w, p.h]} position={[p.x, p.y, p.z]} rotation={[0, p.rot, 0]} />
+      ))}
+    </group>
   );
 }

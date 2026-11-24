@@ -3,13 +3,14 @@ import * as THREE from "three";
 import { Suspense, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import { CameraControls, ContactShadows, PerformanceMonitor, SoftShadows } from "@react-three/drei";
-import { EffectComposer, N8AO, Bloom, ToneMapping, SMAA } from "@react-three/postprocessing";
-import { ToneMappingMode } from "postprocessing";
+import { EffectComposer, N8AO, Bloom, ToneMapping, SMAA, Vignette, Noise } from "@react-three/postprocessing";
+import { BlendFunction, ToneMappingMode } from "postprocessing";
 import { buildRoom, type RoomSpec } from "@/lib/studio/layout";
 import type { CameraPreset, Mood, Scheme, Zone } from "@/lib/studio/scheme";
 import { RoomMeshes, RoomShell } from "./RoomMeshes";
 import { RoomProps } from "./RoomProps";
-import { RoomLights } from "./RoomLights";
+import { RoomLights, WindowLights } from "./RoomLights";
+import { HomeWalker } from "./HomeWalker";
 import { Lighting, MOODS } from "./Lighting";
 import { configureMaterials, disposeMaterials } from "./materials";
 import type { Tier } from "./quality";
@@ -42,6 +43,8 @@ interface Props {
   opened?: Record<string, boolean>;
   openMode?: boolean;
   onToggle?: (id: string) => void;
+  /** Walking the home: the room the visitor is in (-1 = hallway). */
+  onRoomChange?: (i: number) => void;
 }
 
 const MM = 0.001;
@@ -70,7 +73,7 @@ function cameraPose(room: RoomSpec, preset: CameraPreset, compact: boolean, aspe
     const span = preset === "overview" ? room.bounds.width * MM : (r.x1 - r.x0) * MM;
     // dollhouse: high, from the open front, ceiling invisible from above
     const far = preset === "overview" ? 0.8 * Math.min(1.9, Math.max(1, 1.5 / aspect)) : 0.95;
-    return { pos: new THREE.Vector3(cx + span * 0.06, Math.max(7, span * far), D + Math.max(5, span * far * 0.9)), look: new THREE.Vector3(cx, 0, D * 0.5) };
+    return { pos: new THREE.Vector3(cx + span * 0.04, Math.max(7, span * far * 1.22), D + Math.max(4, span * far * 0.62)), look: new THREE.Vector3(cx, 0, D * 0.42) };
   }
   switch (preset) {
     case "eye":
@@ -151,60 +154,6 @@ function Rig({ room, preset, nonce, compact, lock, autoRotate, homeRoom = 0 }: {
   );
 }
 
-/** WASD / arrow keys and the wheel move you through the house in walk mode. */
-function Walker({ active }: { active: boolean }) {
-  const controls = useThree((st) => st.controls) as unknown as CameraControls | null;
-  const gl = useThree((st) => st.gl);
-  useEffect(() => {
-    if (!active || !controls) return;
-    const keys = new Set<string>();
-    let raf = 0;
-    const tick = () => {
-      const step = 0.06;
-      if (keys.has("w") || keys.has("arrowup")) controls.forward(step, false);
-      if (keys.has("s") || keys.has("arrowdown")) controls.forward(-step, false);
-      if (keys.has("a") || keys.has("arrowleft")) controls.truck(-step, 0, false);
-      if (keys.has("d") || keys.has("arrowright")) controls.truck(step, 0, false);
-      if (keys.size) raf = requestAnimationFrame(tick);
-      else raf = 0;
-    };
-    const down = (e: KeyboardEvent) => {
-      const t = (e.target as HTMLElement)?.tagName;
-      if (t === "INPUT" || t === "TEXTAREA" || t === "SELECT") return;
-      const k = e.key.toLowerCase();
-      if (!["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(k)) return;
-      e.preventDefault();
-      keys.add(k);
-      if (!raf) raf = requestAnimationFrame(tick);
-    };
-    const up = (e: KeyboardEvent) => keys.delete(e.key.toLowerCase());
-    // on-screen pad (touch): hold-to-walk events from the Studio UI
-    const pad = (e: Event) => {
-      const { key, down: isDown } = (e as CustomEvent).detail as { key: string; down: boolean };
-      if (isDown) {
-        keys.add(key);
-        if (!raf) raf = requestAnimationFrame(tick);
-      } else keys.delete(key);
-    };
-    window.addEventListener("unipanel:walk", pad);
-    const wheel = (e: WheelEvent) => {
-      e.preventDefault();
-      controls.forward(-e.deltaY * 0.004, true);
-    };
-    window.addEventListener("keydown", down);
-    window.addEventListener("keyup", up);
-    gl.domElement.addEventListener("wheel", wheel, { passive: false });
-    return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener("keydown", down);
-      window.removeEventListener("keyup", up);
-      window.removeEventListener("unipanel:walk", pad);
-      gl.domElement.removeEventListener("wheel", wheel);
-    };
-  }, [active, controls, gl]);
-  return null;
-}
-
 function Bridge({ handle, group }: { handle?: Ref<StudioHandle>; group: React.RefObject<THREE.Group | null> }) {
   const { gl, setDpr, invalidate, viewport, scene, camera, controls } = useThree();
   if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") (window as unknown as { __studio?: unknown }).__studio = { scene, gl, invalidate, camera, controls };
@@ -257,8 +206,8 @@ function RoomReflections({ room, homeRoom = 0, deps, size }: { room: RoomSpec; h
   useEffect(() => {
     const D = room.bounds.depth * MM;
     if (room.rooms) {
-      const r = room.rooms[Math.min(homeRoom, room.rooms.length - 1)];
-      cam.position.set(((r.x0 + r.x1) / 2) * MM, 1.35, D * 0.5);
+      const r = room.rooms[Math.max(0, Math.min(homeRoom, room.rooms.length - 1))];
+      cam.position.set(((r.x0 + r.x1) / 2) * MM, 1.35, ((r.z0 + r.z1) / 2) * MM);
     } else cam.position.set(room.focus[0] * MM, 1.35, Math.min(D * 0.55, 2.6));
     const capture = () => {
       // glossy materials that already use the probe must not read it while it is written
@@ -323,7 +272,7 @@ export default function StudioCanvas(p: Props) {
       shadows={shadows ? (p.tier === 2 ? true : "soft") : false}
       frameloop="demand"
       dpr={[1, dprCap]}
-      gl={{ alpha: false, antialias: p.tier < 2, preserveDrawingBuffer: true, powerPreference: "high-performance", toneMapping: THREE.NeutralToneMapping, outputColorSpace: THREE.SRGBColorSpace }}
+      gl={{ alpha: false, antialias: p.tier < 2, preserveDrawingBuffer: true, powerPreference: "high-performance", toneMapping: THREE.AgXToneMapping, outputColorSpace: THREE.SRGBColorSpace }}
       camera={{ fov: 38, near: 0.05, far: 250, position: [3, 2, 6] }}
       onPointerMissed={() => p.onHover?.(null)}
       style={{ touchAction: "none" }}
@@ -337,7 +286,8 @@ export default function StudioCanvas(p: Props) {
       <Materials />
       <Kick deps={[room, p.scheme, p.mood, p.tier, lightsOn]} />
       <RoomLights room={room} on={lightsOn} tier={p.tier} homeRoom={p.homeRoom} />
-      {shadows && <RoomReflections room={room} homeRoom={p.homeRoom} size={p.tier === 2 ? 256 : 128} deps={[p.scheme, p.mood, lightsOn, openKey]} />}
+      <WindowLights room={room} mood={p.mood} />
+      {shadows && <RoomReflections room={room} homeRoom={p.homeRoom} size={p.tier === 2 ? 512 : 192} deps={[p.scheme, p.mood, lightsOn, openKey]} />}
       <PerformanceMonitor onDecline={() => setDprCap((d) => Math.max(1, d - 0.25))} />
       <Lighting mood={p.mood} shadows={shadows} shadowMapSize={p.tier === 2 ? (room.rooms ? 4096 : 2048) : room.rooms ? 2048 : 1024} span={room.bounds.width * MM} />
       <Suspense fallback={null}>
@@ -352,6 +302,7 @@ export default function StudioCanvas(p: Props) {
             night={night}
             onLights={p.onLights}
             reflect={p.tier === 2}
+            cutaway={!!room.rooms && p.camera !== "walk"}
           />
           <RoomProps props={room.props} />
           <RoomMeshes
@@ -372,15 +323,24 @@ export default function StudioCanvas(p: Props) {
         </group>
         {!shadows && <ContactShadows position={[0, 0.001, (room.bounds.depth * MM) / 2]} scale={12} blur={2.4} opacity={0.5} far={2.5} frames={1} />}
       </Suspense>
-      <Rig room={room} preset={p.camera} nonce={p.cameraNonce} compact={!!p.compact} lock={p.lockControls} autoRotate={p.autoRotate} homeRoom={p.homeRoom} />
-      <Walker active={!!room.rooms && p.camera === "walk" && !p.lockControls} />
+      {room.rooms && p.camera === "walk" ? (
+        <HomeWalker room={room} onRoomChange={p.onRoomChange} />
+      ) : (
+        <Rig room={room} preset={p.camera} nonce={p.cameraNonce} compact={!!p.compact} lock={p.lockControls} autoRotate={p.autoRotate} homeRoom={p.homeRoom} />
+      )}
       <Bridge handle={p.handle} group={group} />
       {p.tier === 2 ? (
         <EffectComposer multisampling={0} enableNormalPass={false}>
-          <N8AO aoRadius={0.35} distanceFalloff={0.6} intensity={2.2} quality="medium" halfRes />
-          <Bloom luminanceThreshold={0.92} luminanceSmoothing={0.1} intensity={0.25} mipmapBlur />
-          <ToneMapping mode={ToneMappingMode.NEUTRAL} />
+          {/* contact shadows in corners and under furniture */}
+          <N8AO aoRadius={0.5} distanceFalloff={0.8} intensity={2.6} quality="medium" halfRes />
+          {/* bright windows and lamps bloom a little, as they do through a lens */}
+          <Bloom luminanceThreshold={0.88} luminanceSmoothing={0.15} intensity={0.32} mipmapBlur />
+          {/* filmic AgX curve: sunlit walls roll off softly instead of clipping to white */}
+          <ToneMapping mode={ToneMappingMode.AGX} />
           <SMAA />
+          {/* a lens's gentle falloff and fine sensor grain */}
+          <Vignette offset={0.28} darkness={0.42} />
+          <Noise premultiply blendFunction={BlendFunction.SOFT_LIGHT} opacity={0.16} />
         </EffectComposer>
       ) : null}
     </Canvas>

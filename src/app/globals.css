@@ -354,3 +354,13 @@ body {
 
 /* intro loader: hidden before paint for visitors who already saw it this session */
 .intro-seen .intro-loader { display: none !important; }
+
+/* Studio home walk: room name as you pass through a doorway */
+.room-toast { animation: room-toast 2.2s cubic-bezier(.22,1,.36,1) forwards; }
+@keyframes room-toast {
+  0% { opacity: 0; transform: translate(-50%, 10px); filter: blur(6px); }
+  18% { opacity: 1; transform: translate(-50%, 0); filter: blur(0); }
+  75% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -6px); }
+}
+@media (prefers-reduced-motion: reduce) { .room-toast { animation: none; } }

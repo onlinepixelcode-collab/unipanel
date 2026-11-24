@@ -46,16 +46,17 @@ export function Lighting({ mood, shadows, shadowMapSize = 2048, span = 6 }: { mo
       sun.current.position.lerp(target.current, k);
       color.current.set(m.key);
       sun.current.color.lerp(color.current, k);
-      sun.current.intensity += (m.keyIntensity * (wide ? 1.15 : 1) - sun.current.intensity) * k;
+      sun.current.intensity += (m.keyIntensity * (wide ? 0.95 : 1) - sun.current.intensity) * k;
     }
     const s = scene as THREE.Scene & { environmentIntensity?: number };
     if (s.environmentIntensity !== undefined) {
-      const env = m.env * (wide ? 1.35 : 1);
+      // inside a whole house, light should come through windows, not from an all-round studio
+      const env = m.env * (wide ? 0.38 : 1);
       if (Math.abs(s.environmentIntensity - env) > 0.005) moving = true;
       s.environmentIntensity += (env - s.environmentIntensity) * k;
     }
     if (hemi.current) {
-      const hTarget = wide ? m.hemi * 3 : m.hemi;
+      const hTarget = wide ? m.hemi * 1.7 : m.hemi;
       if (Math.abs(hemi.current.intensity - hTarget) > 0.002) moving = true;
       hemi.current.intensity += (hTarget - hemi.current.intensity) * k;
     }
@@ -77,8 +78,9 @@ export function Lighting({ mood, shadows, shadowMapSize = 2048, span = 6 }: { mo
         {/* thin strip light for crisp clearcoat highlights */}
         <Lightformer form="rect" intensity={4} color="#ffffff" position={[0, 3.2, 6]} rotation={[-Math.PI / 4, 0, 0]} scale={[6, 0.15, 1]} />
       </Environment>
-      <hemisphereLight ref={hemi} args={[m.fill, "#3a3631", wide ? m.hemi * 3 : m.hemi]} />
-      {wide && <ambientLight intensity={m.night ? 0.03 : 0.35} color={m.fill} />}
+      {/* sky from above, warm light bouncing off the floor from below */}
+      <hemisphereLight ref={hemi} args={[m.fill, "#7a6650", wide ? m.hemi * 1.7 : m.hemi]} />
+      {wide && <ambientLight intensity={m.night ? 0.02 : 0.12} color={m.fill} />}
       <directionalLight
         ref={sun}
         position={sunPos}
@@ -86,14 +88,14 @@ export function Lighting({ mood, shadows, shadowMapSize = 2048, span = 6 }: { mo
         color={m.key}
         castShadow={shadows}
         shadow-mapSize={[shadowMapSize, shadowMapSize]}
-        shadow-bias={-0.0004}
-        shadow-normalBias={0.02}
+        shadow-bias={wide ? -0.0015 : -0.0004}
+        shadow-normalBias={wide ? 0.06 : 0.02}
         shadow-camera-left={-half}
         shadow-camera-right={half}
         shadow-camera-top={wide ? 9 : 5}
         shadow-camera-bottom={wide ? -9 : -5}
         shadow-camera-near={0.5}
-        shadow-camera-far={wide ? 60 : 20}
+        shadow-camera-far={wide ? 40 : 20}
       />
     </>
   );

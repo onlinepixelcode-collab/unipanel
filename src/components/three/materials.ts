@@ -184,3 +184,43 @@ export function disposeMaterials() {
   stagingCache.clear();
   texCache.clear();
 }
+
+/**
+ * Plastered walls and ceilings: a seamless, world-space noise (two scales: trowel marks
+ * and fine grit) gently varies the colour and roughness so painted surfaces stop reading
+ * as flat CG. Applied once per material; costs a few shader instructions.
+ */
+export function plaster<T extends THREE.MeshStandardMaterial>(m: T): T {
+  if (m.userData.plaster) return m;
+  m.userData.plaster = true;
+  m.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nvarying vec3 vPlaster;")
+      .replace("#include <project_vertex>", "#include <project_vertex>\nvPlaster = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+varying vec3 vPlaster;
+float plHash(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+float plNoise(vec3 x){ vec3 i = floor(x); vec3 f = fract(x); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(plHash(i), plHash(i + vec3(1,0,0)), f.x), mix(plHash(i + vec3(0,1,0)), plHash(i + vec3(1,1,0)), f.x), f.y),
+             mix(mix(plHash(i + vec3(0,0,1)), plHash(i + vec3(1,0,1)), f.x), mix(plHash(i + vec3(0,1,1)), plHash(i + vec3(1,1,1)), f.x), f.y), f.z); }`,
+      )
+      .replace(
+        "#include <color_fragment>",
+        `#include <color_fragment>
+float plA = plNoise(vPlaster * 1.7) * 0.6 + plNoise(vPlaster * 5.3) * 0.4;
+float plB = plNoise(vPlaster * 61.0);
+diffuseColor.rgb *= 0.965 + plA * 0.05 + (plB - 0.5) * 0.02;`,
+      )
+      .replace(
+        "#include <roughnessmap_fragment>",
+        `#include <roughnessmap_fragment>
+roughnessFactor = clamp(roughnessFactor - 0.08 + plNoise(vPlaster * 9.0) * 0.12, 0.0, 1.0);`,
+      );
+  };
+  m.customProgramCacheKey = () => "plaster";
+  m.needsUpdate = true;
+  return m;
+}

@@ -19,6 +19,9 @@ interface StudioState {
   /** Two designs: the one being edited (`scheme`) and the parked one (`other`). */
   homeRoom: number;
   setHomeRoom: (i: number) => void;
+  /** Walking the home: the room the visitor is standing in (-1 = hallway). */
+  currentRoom: number;
+  setCurrentRoom: (i: number) => void;
   slot: "A" | "B";
   other: Scheme;
   comparing: boolean;
@@ -58,22 +61,27 @@ interface StudioState {
 
 const pushRecent = (list: string[], id: string) => [id, ...list.filter((x) => x !== id)].slice(0, 12);
 
+/** The Studio opens on the whole home, standing at the front door. */
+const START: Scheme = { ...DEFAULT_SCHEME, scene: "home" };
+
 export const useStudio = create<StudioState>()((set, get) => ({
-  scheme: DEFAULT_SCHEME,
+  scheme: START,
   past: [],
   future: [],
   selected: null,
   hovered: null,
   mood: "morning",
-  camera: "overview",
+  camera: "walk",
   cameraNonce: 0,
   favourites: [],
   recent: [],
   announce: "",
   homeRoom: 0,
   setHomeRoom: (i) => set({ homeRoom: i, camera: "walk", cameraNonce: get().cameraNonce + 1 }),
+  currentRoom: -1,
+  setCurrentRoom: (i) => set((st) => ({ currentRoom: i, homeRoom: i >= 0 ? i : st.homeRoom })),
   slot: "A",
-  other: DEFAULT_SCHEME,
+  other: START,
   comparing: false,
   lightsOn: false,
   opened: {},
@@ -116,7 +124,7 @@ export const useStudio = create<StudioState>()((set, get) => ({
     const s = get().scheme;
     if (s.scene === scene) return;
     get().commit({ ...s, scene }, `Scene changed`);
-    set({ opened: {}, tapOn: false, selected: null, camera: "overview", cameraNonce: get().cameraNonce + 1 });
+    set({ opened: {}, tapOn: false, selected: null, camera: scene === "home" ? "walk" : "overview", cameraNonce: get().cameraNonce + 1 });
   },
   setLayout: (layout) => {
     const s = get().scheme;
@@ -135,7 +143,7 @@ export const useStudio = create<StudioState>()((set, get) => ({
     if (!future.length) return;
     set({ scheme: future[0], future: future.slice(1), past: [...past, scheme], announce: "Redone" });
   },
-  reset: () => get().commit(DEFAULT_SCHEME, "Scheme reset"),
+  reset: () => get().commit({ ...DEFAULT_SCHEME, scene: get().scheme.scene }, "Scheme reset"),
   select: (z) => set({ selected: z }),
   hover: (z) => set({ hovered: z }),
   setMood: (mood) => set({ mood, lightsOn: mood === "night" || mood === "evening" }),

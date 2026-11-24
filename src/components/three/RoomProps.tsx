@@ -2,6 +2,7 @@
 import * as THREE from "three";
 import { memo, useMemo } from "react";
 import type { Prop } from "@/lib/studio/layout";
+import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { getStagingMaterial } from "./materials";
 
 /**
@@ -29,7 +30,44 @@ const M = {
   pasta: () => getStagingMaterial("p-pasta", "#e2c27e", { roughness: 0.9 }),
   beans: () => getStagingMaterial("p-beans", "#4a2f1d", { roughness: 0.8 }),
   rice: () => getStagingMaterial("p-rice", "#f4f0e6", { roughness: 0.95 }),
+  fabric: (c: string) => getStagingMaterial("p-fabric", c, { roughness: 0.96, sheen: 0.6, sheenRoughness: 0.8, sheenColor: new THREE.Color("#ffffff") }),
+  travertine: () => getStagingMaterial("p-travertine", "#d8cbb5", { roughness: 0.55, clearcoat: 0.25 }),
+  shade: () => getStagingMaterial("p-shade", "#f3ece0", { roughness: 0.9, side: THREE.DoubleSide, emissive: new THREE.Color("#ffd9a8"), emissiveIntensity: 0.35 }),
 };
+
+/** Abstract paintings for the hall: soft colour fields, drawn once. */
+const artCache = new Map<number, THREE.CanvasTexture>();
+function artTexture(seed: number) {
+  const hit = artCache.get(seed % 3);
+  if (hit) return hit;
+  const c = document.createElement("canvas");
+  c.width = 360;
+  c.height = 440;
+  const g = c.getContext("2d")!;
+  const r = rng(seed + 11);
+  const palettes = [
+    ["#e9e2d4", "#c8a27a", "#7b5a42", "#2f2a26"],
+    ["#ece8e1", "#9aa7a0", "#5e6d68", "#d9c09a"],
+    ["#efe9dd", "#d3b48c", "#b46c4a", "#3b3530"],
+  ];
+  const pal = palettes[seed % 3];
+  g.fillStyle = pal[0];
+  g.fillRect(0, 0, 360, 440);
+  for (let i = 0; i < 5; i++) {
+    g.fillStyle = pal[1 + (i % 3)];
+    g.globalAlpha = 0.55 + r() * 0.35;
+    g.beginPath();
+    const x = 60 + r() * 240, y = 60 + r() * 320, rad = 50 + r() * 110;
+    if (i % 2) g.ellipse(x, y, rad, rad * (0.5 + r() * 0.6), r() * 3, 0, Math.PI * 2);
+    else g.rect(x - rad / 2, y - rad, rad * 0.9, rad * 1.6);
+    g.fill();
+  }
+  g.globalAlpha = 1;
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  artCache.set(seed % 3, t);
+  return t;
+}
 
 const lathe = (pts: [number, number][], seg = 40) => new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), seg);
 
@@ -73,6 +111,21 @@ const G = {
 
 function Box({ s, p, r = [0, 0, 0], m }: { s: [number, number, number]; p: [number, number, number]; r?: [number, number, number]; m: THREE.Material }) {
   return <mesh geometry={G.box} material={m} scale={s} position={p} rotation={r} castShadow receiveShadow />;
+}
+
+/** Upholstery: a rounded box at its real size (rounding in metres), so cushions and frames read soft, not boxy. */
+const softCache = new Map<string, THREE.BufferGeometry>();
+function softGeo(w: number, h: number, d: number, r: number) {
+  const k = `${w.toFixed(3)}|${h.toFixed(3)}|${d.toFixed(3)}|${r.toFixed(3)}`;
+  let g = softCache.get(k);
+  if (!g) {
+    g = new RoundedBoxGeometry(w, h, d, 4, Math.min(r, w / 2 - 0.001, h / 2 - 0.001, d / 2 - 0.001));
+    softCache.set(k, g);
+  }
+  return g;
+}
+function Soft({ s, p, r = [0, 0, 0], m, round = 0.04 }: { s: [number, number, number]; p: [number, number, number]; r?: [number, number, number]; m: THREE.Material; round?: number }) {
+  return <mesh geometry={softGeo(s[0], s[1], s[2], round)} material={m} position={p} rotation={r} castShadow receiveShadow />;
 }
 function Cyl({ r, h, p, m, rot }: { r: number; h: number; p: [number, number, number]; m: THREE.Material; rot?: [number, number, number] }) {
   return <mesh geometry={G.disc} material={m} scale={[r, h, r]} position={p} rotation={rot} castShadow receiveShadow />;
@@ -314,6 +367,130 @@ function Item({ p }: { p: Prop }) {
         </>
       );
     }
+    case "sofa": {
+      const w = (p.span ?? 2400) * MM;
+      const fab = M.fabric("#cdc6ba");
+      const seat = w - 0.36;
+      const n = Math.max(2, Math.round(seat / 0.8));
+      return (
+        <>
+          <Soft s={[w, 0.3, 0.95]} p={[0, 0.2, 0]} m={fab} />
+          {Array.from({ length: n }, (_, i) => (
+            <Soft key={i} s={[seat / n - 0.015, 0.14, 0.7]} p={[-seat / 2 + (seat / n) * (i + 0.5), 0.42, 0.08]} m={fab} />
+          ))}
+          <Soft s={[w - 0.04, 0.46, 0.22]} p={[0, 0.58, -0.36]} m={fab} />
+          {[-1, 1].map((sd) => (
+            <Soft key={sd} s={[0.18, 0.62, 0.95]} p={[sd * (w / 2 - 0.09), 0.36, 0]} m={fab} />
+          ))}
+          {[-0.45, 0.42].map((x, i) => (
+            <Soft key={`c${i}`} s={[0.42, 0.4, 0.13]} p={[x * (w / 2 - 0.4), 0.66, -0.2]} r={[-0.25, i ? -0.2 : 0.25, 0]} m={M.fabric(i ? "#8a6f55" : "#e8e2d6")} />
+          ))}
+          {[-1, 1].flatMap((sx) => [-1, 1].map((sz) => <Cyl key={`${sx}${sz}`} r={0.02} h={0.06} p={[sx * (w / 2 - 0.08), 0.03, sz * 0.4]} m={M.black()} />))}
+        </>
+      );
+    }
+    case "armchair": {
+      const fab = M.fabric("#a89580");
+      return (
+        <>
+          <Soft s={[0.82, 0.3, 0.82]} p={[0, 0.25, 0]} m={fab} />
+          <Soft s={[0.6, 0.12, 0.62]} p={[0, 0.46, 0.06]} m={fab} />
+          <Soft s={[0.82, 0.48, 0.18]} p={[0, 0.6, -0.32]} r={[-0.12, 0, 0]} m={fab} />
+          {[-1, 1].map((sd) => (
+            <Soft key={sd} s={[0.13, 0.56, 0.82]} p={[sd * 0.345, 0.38, 0]} m={fab} />
+          ))}
+          {[-1, 1].flatMap((sx) => [-1, 1].map((sz) => <Cyl key={`${sx}${sz}`} r={0.018} h={0.1} p={[sx * 0.34, 0.05, sz * 0.34]} m={M.walnut()} />))}
+        </>
+      );
+    }
+    case "rug":
+    case "runner": {
+      const w = (p.span ?? 2400) * MM;
+      const d = p.kind === "runner" ? 0.9 : w * 0.68;
+      return (
+        <>
+          <mesh geometry={G.box} material={M.fabric(p.kind === "runner" ? "#b8ab98" : "#d6cdbd")} scale={[w, 0.012, d]} position={[0, 0.006, 0]} receiveShadow />
+          <mesh geometry={G.box} material={M.fabric(p.kind === "runner" ? "#a3957f" : "#c7bca9")} scale={[w - 0.16, 0.013, d - 0.16]} position={[0, 0.0065, 0]} receiveShadow />
+        </>
+      );
+    }
+    case "coffeeTable":
+      return (
+        <>
+          <mesh geometry={G.disc} material={M.travertine()} scale={[0.6, 0.04, 0.36]} position={[0, 0.38, 0]} castShadow receiveShadow />
+          <mesh geometry={G.disc} material={M.travertine()} scale={[0.3, 0.36, 0.16]} position={[0, 0.18, 0]} castShadow />
+          <group position={[-0.22, 0.4, 0.02]}>
+            <Box s={[0.26, 0.03, 0.2]} p={[0, 0.015, 0]} m={M.paper("#2f3a3f")} />
+            <Box s={[0.24, 0.025, 0.18]} p={[0, 0.042, 0]} r={[0, 0.2, 0]} m={M.paper("#e8e3d8")} />
+          </group>
+          <mesh geometry={G.bowl} material={M.dark()} position={[0.22, 0.4, 0]} scale={0.7} castShadow />
+        </>
+      );
+    case "floorLamp":
+      return (
+        <>
+          <Cyl r={0.14} h={0.02} p={[0, 0.01, 0]} m={M.black()} />
+          <Cyl r={0.011} h={1.45} p={[0, 0.73, 0]} m={M.black()} />
+          <mesh geometry={G.jar} material={M.shade()} scale={[3.2, 0.3, 3.2]} position={[0, 1.52, 0]} />
+        </>
+      );
+    case "lamp":
+      return (
+        <>
+          <mesh geometry={G.vase} material={M.ceramic()} scale={[0.75, 0.75, 0.75]} castShadow />
+          <mesh geometry={G.jar} material={M.shade()} scale={[2.4, 0.2, 2.4]} position={[0, 0.34, 0]} />
+        </>
+      );
+    case "bed": {
+      const cover = M.fabric("#ece8e0");
+      return (
+        <>
+          <Soft s={[1.92, 0.32, 2.16]} p={[0, 0.16, 0]} m={M.fabric("#b9b1a4")} />
+          <Soft s={[1.82, 0.22, 2.02]} p={[0, 0.43, 0]} m={M.fabric("#f6f4ef")} />
+          <Soft s={[1.9, 0.09, 1.5]} p={[0, 0.56, 0.3]} m={cover} />
+          <Soft s={[1.94, 0.06, 0.5]} p={[0, 0.62, 0.72]} m={M.fabric("#7b6852")} />
+          {[-0.45, 0.45].map((x) => (
+            <Soft key={x} s={[0.7, 0.16, 0.42]} p={[x, 0.62, -0.72]} r={[-0.35, 0, 0]} m={M.fabric("#f4f2ee")} />
+          ))}
+          {[-0.3, 0.3].map((x) => (
+            <Soft key={`s${x}`} s={[0.5, 0.12, 0.13]} p={[x, 0.64, -0.5]} r={[-0.2, 0, 0]} m={M.fabric("#c9b9a2")} />
+          ))}
+        </>
+      );
+    }
+    case "bench":
+      return (
+        <>
+          <Soft s={[1.3, 0.1, 0.42]} p={[0, 0.45, 0]} m={M.fabric("#a89580")} round={0.035} />
+          {[-1, 1].flatMap((sx) => [-1, 1].map((sz) => <Box key={`${sx}${sz}`} s={[0.04, 0.4, 0.04]} p={[sx * 0.6, 0.2, sz * 0.17]} m={M.walnut()} />))}
+        </>
+      );
+    case "console":
+      return (
+        <>
+          <Box s={[1.3, 0.035, 0.38]} p={[0, 0.8, 0]} m={M.walnut()} />
+          {[-1, 1].map((sx) => (
+            <Box key={sx} s={[0.03, 0.78, 0.32]} p={[sx * 0.6, 0.39, 0]} m={M.black()} />
+          ))}
+          <group position={[-0.35, 0.818, 0]}>
+            <mesh geometry={G.vase} material={M.ceramic()} castShadow />
+          </group>
+          <group position={[0.35, 0.818, 0]}>
+            <Box s={[0.24, 0.03, 0.18]} p={[0, 0.015, 0]} m={M.paper("#9c6b4a")} />
+            <Box s={[0.22, 0.03, 0.17]} p={[0, 0.045, 0]} r={[0, 0.25, 0]} m={M.paper("#e8e3d8")} />
+          </group>
+        </>
+      );
+    case "art":
+      return (
+        <>
+          <Box s={[0.92, 1.12, 0.035]} p={[0, 0, 0.018]} m={M.black()} />
+          <mesh position={[0, 0, 0.037]}>
+            <planeGeometry args={[0.82, 1.02]} />
+            <meshStandardMaterial map={artTexture(seed)} roughness={0.85} />
+          </mesh>
+        </>
+      );
     case "stool":
       return (
         <>

@@ -31,7 +31,9 @@ export interface Panel {
   hollow?: number;
 }
 
-export type PropKind = "jars" | "plant" | "kettle" | "pot" | "boards" | "bowl" | "vase" | "books" | "plates" | "glasses" | "stool" | "folded" | "garments" | "soap" | "bottles" | "towel" | "speaker";
+export type PropKind =
+  | "jars" | "plant" | "kettle" | "pot" | "boards" | "bowl" | "vase" | "books" | "plates" | "glasses" | "stool" | "folded" | "garments" | "soap" | "bottles" | "towel" | "speaker"
+  | "sofa" | "armchair" | "rug" | "coffeeTable" | "floorLamp" | "bed" | "lamp" | "bench" | "console" | "art" | "runner" | "diningTable";
 
 /** Styling items (visual staging only): kitchenware, books, plants. Position is the item's base centre, in mm. */
 export interface Prop {
@@ -47,14 +49,47 @@ export interface RoomInfo {
   name: string;
   x0: number;
   x1: number;
+  /** depth extent of the room in the house plan (mm) */
+  z0: number;
+  z1: number;
+  /** where to stand to take the room in, and which way to face (yaw radians, 0 = towards -z) */
+  view?: { x: number; z: number; yaw: number };
   /** eye-level viewpoint for walking: where you stand and what you look at (mm) */
   eye: [number, number, number];
   look: [number, number, number];
 }
 
+/** An opening in a wall line: a doorway (optionally with a door leaf), an open archway or a window (mm). */
+export interface WallOpening {
+  c: number;
+  w: number;
+  kind: "door" | "open" | "window";
+  /** door leaf swings this way (+1/-1 about its hinge) */
+  swing?: number;
+  sill?: number;
+  top?: number;
+}
+/** A straight wall: runs along `axis` from a to b; its thickness starts at `at` (mm). */
+export interface WallLine {
+  axis: "x" | "z";
+  at: number;
+  a: number;
+  b: number;
+  outer?: boolean;
+  openings: WallOpening[];
+}
+/** The whole-home plan: walls with their openings, circulation areas, and where a visitor starts (mm). */
+export interface HomeSpec {
+  walls: WallLine[];
+  /** hall and other circulation areas that are not rooms */
+  halls: { x0: number; x1: number; z0: number; z1: number }[];
+  spawn: { x: number; z: number; yaw: number };
+}
+
 export interface RoomSpec {
   /** Whole-home tour: the rooms laid out side by side, joined by doorways. */
   rooms?: RoomInfo[];
+  home?: HomeSpec;
   panels: Panel[];
   props: Prop[];
   bounds: { width: number; depth: number; height: number };
@@ -603,6 +638,12 @@ function media(b: Builder): RoomSpec {
   wallRun.prop("vase", tvX + 260, 680 + b.scheme.buildup, DOOR + 220);
   wallRun.prop("books", tvX + tvW - 300, 680 + b.scheme.buildup, DOOR + 220, 0, 320);
   wallRun.prop("plant", -250, 0, 500);
+  // lounge: sofa facing the screen, rug, coffee table, armchair and a reading lamp
+  wallRun.prop("rug", W / 2, 0, 2700, 0, 3000);
+  wallRun.prop("sofa", W / 2, 0, 3650, Math.PI, 2600);
+  wallRun.prop("coffeeTable", W / 2, 0, 2600);
+  wallRun.prop("armchair", W - 350, 0, 2500, Math.PI + 0.7);
+  wallRun.prop("floorLamp", W / 2 + 1550, 0, 3900);
   wallRun.add((W - 1450) / 2, 1080, DOOR, 1450, 820, 40, { zone: null, staging: "tv", order: 0.95 });
   return {
     panels: b.panels,
@@ -654,40 +695,206 @@ function vanity(b: Builder): RoomSpec {
   };
 }
 
-const HOME_DEPTH = 4800;
+// ---------------------------------------------------------------- bedroom
 
-/** Kitchen, lounge, bedroom (walk-in wardrobe) and bathroom side by side, joined by doorways. */
+/** A bedroom with a full-height cladded headboard wall, floating bedside drawers and a ledge. */
+function bedroom(b: Builder): RoomSpec {
+  const W = 4200;
+  const run = new Run(b, [-W / 2, 0], 0);
+  // headboard wall: full-height cladding behind the bed
+  run.add(0, 0, 0, W, 2700, DOOR, { zone: "cladding", order: 0.2 });
+  // picture ledge across the headboard wall
+  run.add(W / 2 - 1000, 1250, DOOR, 2000, b.scheme.buildup, 140, { zone: "shelving", order: 0.8 });
+  run.prop("vase", W / 2 - 700, 1250 + b.scheme.buildup, DOOR + 70);
+  run.prop("books", W / 2 + 600, 1250 + b.scheme.buildup, DOOR + 70, 0, 360);
+  // floating bedside units with two drawers each
+  for (const x of [W / 2 - 1450, W / 2 + 950]) {
+    run.add(x, 360, DOOR, 500, 400, 420, { zone: null, staging: "carcass", order: 0.4, hollow: 0 });
+    for (const [k, y] of [560, 360].entries()) {
+      run.front(x + GAP, y + GAP / 2, DOOR + 420, 500 - GAP * 2, 198, "baseDoors", 0.8, { travel: 320 });
+      run.handle(x + GAP, y + GAP / 2, DOOR + 420, 500 - GAP * 2, 198, "top");
+      void k;
+    }
+    run.add(x - DOOR, 360, DOOR, DOOR, 400, 438, { zone: "gables", order: 0.45 });
+    run.add(x + 500, 360, DOOR, DOOR, 400, 438, { zone: "gables", order: 0.45 });
+    run.prop("lamp", x + 250, 760, DOOR + 210);
+  }
+  run.prop("bed", W / 2, 0, DOOR + 1080);
+  run.prop("rug", W / 2, 0, DOOR + 1500, 0, 2800);
+  run.prop("bench", W / 2, 0, DOOR + 2450);
+  run.prop("plant", W - 300, 0, 1700);
+  return {
+    panels: b.panels,
+    props: b.props,
+    bounds: { width: W + 600, depth: 4800, height: 2700 },
+    focus: [0, 1100, 1200],
+    detailFocus: [W / 2 - 1200, 560, 450],
+    walls: { left: true, right: true },
+  };
+}
+
+const HOME_DEPTH = 4800;
+const WALL_T = 120;
+
+/** Place a room's own panels and props into the house: turned by `rot` (0 or π) about the room centre. */
+function placeRoom(spec: RoomSpec, tag: string, cx: number, back: number, rot: number, panels: Panel[], props: Prop[], n: { v: number }) {
+  const flip = rot !== 0;
+  const tx = (x: number) => (flip ? cx - x : cx + x);
+  const tz = (z: number) => (flip ? back - z : back + z);
+  for (const pn of spec.panels)
+    panels.push({
+      ...pn,
+      key: `h${n.v++}`,
+      pos: [tx(pn.pos[0]), pn.pos[1], tz(pn.pos[2])],
+      rotY: pn.rotY + rot,
+      motion: pn.motion ? { ...pn.motion, id: tag + pn.motion.id } : undefined,
+      moveWith: pn.moveWith ? tag + pn.moveWith : undefined,
+    });
+  for (const pr of spec.props) props.push({ ...pr, pos: [tx(pr.pos[0]), pr.pos[1], tz(pr.pos[2])], rotY: pr.rotY + rot });
+}
+
+/**
+ * The whole home, laid out like a real house (about 15.6 × 11.6 m): a bedroom wing to the
+ * north (bedroom, walk-in wardrobe through it, bathroom), a hallway across the middle, and
+ * the living wing to the south (open-plan kitchen and lounge, and the entrance foyer with
+ * the front door). Rooms face the hall; units and feature walls sit on the outer walls.
+ */
 function home(s: Scheme): RoomSpec {
-  const parts: { id: string; name: string; spec: RoomSpec }[] = [
-    { id: "kitchen", name: "Kitchen", spec: kitchen(new Builder({ ...s, scene: "kitchen", layout: s.layout === "straight" || s.layout === "galley" ? s.layout : "island" })) },
-    { id: "lounge", name: "Lounge", spec: media(new Builder({ ...s, scene: "media" })) },
-    { id: "bedroom", name: "Bedroom & wardrobe", spec: wardrobe(new Builder({ ...s, scene: "wardrobe" })) },
-    { id: "bathroom", name: "Bathroom", spec: vanity(new Builder({ ...s, scene: "vanity" })) },
-  ];
+  const T = WALL_T;
+  const DEPTH = HOME_DEPTH; // each wing is 4.8m deep
+  const build = {
+    kitchen: kitchen(new Builder({ ...s, scene: "kitchen", layout: s.layout === "straight" || s.layout === "galley" ? s.layout : "island" })),
+    lounge: media(new Builder({ ...s, scene: "media" })),
+    bedroom: bedroom(new Builder({ ...s, scene: "wardrobe" })),
+    wardrobe: wardrobe(new Builder({ ...s, scene: "wardrobe" })),
+    bathroom: vanity(new Builder({ ...s, scene: "vanity" })),
+  };
+  const span = (r: RoomSpec) => r.bounds.width + 600;
+  // north wing
+  const bedW = span(build.bedroom), warW = span(build.wardrobe), batW = span(build.bathroom);
+  const W = bedW + T + warW + T + batW;
+  const nz0 = 0, nz1 = DEPTH;
+  const hz0 = nz1 + T, hz1 = hz0 + 1800;
+  const sz0 = hz1 + T, sz1 = sz0 + DEPTH;
+  const kitW = span(build.kitchen), louW = span(build.lounge);
+  const foyW = W - kitW - louW - 2 * T;
+
   const panels: Panel[] = [];
   const props: Prop[] = [];
+  const n = { v: 0 };
   const rooms: RoomInfo[] = [];
-  let cursor = 0;
-  let n = 0;
-  for (const p of parts) {
-    const span = p.spec.bounds.width + 600; // the room's own wall-to-wall width
-    const cx = cursor + span / 2;
-    const tag = p.id.slice(0, 2);
-    for (const pn of p.spec.panels)
-      panels.push({
-        ...pn,
-        key: `h${n++}`,
-        pos: [pn.pos[0] + cx, pn.pos[1], pn.pos[2]],
-        motion: pn.motion ? { ...pn.motion, id: tag + pn.motion.id } : undefined,
-        moveWith: pn.moveWith ? tag + pn.moveWith : undefined,
-      });
-    for (const pr of p.spec.props) props.push({ ...pr, pos: [pr.pos[0] + cx, pr.pos[1], pr.pos[2]] });
-    rooms.push({ id: p.id, name: p.name, x0: cursor, x1: cursor + span, eye: [cx + span * 0.18, 1600, HOME_DEPTH - 500], look: [cx - span * 0.05, 1250, 600] });
-    cursor += span + 120; // partition wall
-  }
-  const total = cursor - 120;
+  const add = (id: string, name: string, spec: RoomSpec | null, x0: number, w: number, north: boolean, view?: { lx: number; lz: number; yaw: number }) => {
+    const cx = x0 + w / 2;
+    const back = north ? nz0 : sz1;
+    const rot = north ? 0 : Math.PI;
+    if (spec) placeRoom(spec, id.slice(0, 2), cx, back, rot, panels, props, n);
+    const v = view ?? { lx: 300, lz: DEPTH - 1500, yaw: 0 };
+    rooms.push({
+      id,
+      name,
+      x0,
+      x1: x0 + w,
+      z0: north ? nz0 : sz0,
+      z1: north ? nz1 : sz1,
+      eye: [cx, 1600, north ? DEPTH - 500 : sz0 + 500],
+      look: [cx, 1250, north ? 600 : sz1 - 600],
+      view: { x: north ? cx + v.lx : cx - v.lx, z: north ? back + v.lz : back - v.lz, yaw: v.yaw + rot },
+    });
+  };
+  add("bedroom", "Bedroom", build.bedroom, 0, bedW, true);
+  add("wardrobe", "Walk-in wardrobe", build.wardrobe, bedW + T, warW, true);
+  add("bathroom", "Bathroom", build.bathroom, bedW + T + warW + T, batW, true, { lx: 0, lz: DEPTH - 1700, yaw: 0 });
+  add("kitchen", "Kitchen", build.kitchen, 0, kitW, false);
+  // the lounge's sofa faces the media wall: stand beside it, not behind it
+  add("lounge", "Lounge", build.lounge, kitW + T, louW, false, { lx: -1850, lz: DEPTH - 1100, yaw: -0.42 });
+  add("foyer", "Entrance", null, kitW + T + louW + T, foyW, false, { lx: 0, lz: DEPTH - 1200, yaw: 0 });
+
+  const [bed, war, bat, kit, lou, foy] = rooms;
+  const mid = (r: RoomInfo) => (r.x0 + r.x1) / 2;
+  const walls: WallLine[] = [
+    // outer walls
+    { axis: "x", at: -T, a: -T, b: W + T, outer: true, openings: [] },
+    {
+      axis: "x",
+      at: sz1,
+      a: -T,
+      b: W + T,
+      outer: true,
+      openings: [
+        { c: mid(foy), w: 1100, kind: "door", swing: 1 },
+        { c: mid(foy) + 1300, w: 900, kind: "window", sill: 300, top: 2300 },
+      ],
+    },
+    {
+      axis: "z",
+      at: -T,
+      a: 0,
+      b: sz1,
+      outer: true,
+      openings: [
+        { c: 2400, w: 1400, kind: "window", sill: 900, top: 2250 },
+        { c: (hz0 + hz1) / 2, w: 1200, kind: "window", sill: 300, top: 2300 },
+        { c: sz1 - 2600, w: 1600, kind: "window", sill: 1000, top: 2250 },
+      ],
+    },
+    {
+      axis: "z",
+      at: W,
+      a: 0,
+      b: sz1,
+      outer: true,
+      openings: [
+        { c: 2400, w: 1000, kind: "window", sill: 1500, top: 2200 },
+        { c: (hz0 + hz1) / 2, w: 1200, kind: "window", sill: 300, top: 2300 },
+        { c: sz0 + 2000, w: 1400, kind: "window", sill: 600, top: 2300 },
+      ],
+    },
+    // north wing / hall
+    {
+      axis: "x",
+      at: nz1,
+      a: 0,
+      b: W,
+      openings: [
+        { c: bed.x0 + 800, w: 900, kind: "door", swing: 1 },
+        { c: bat.x0 + 700, w: 800, kind: "door", swing: 1 },
+      ],
+    },
+    // hall / south wing
+    {
+      axis: "x",
+      at: hz1,
+      a: 0,
+      b: W,
+      openings: [
+        { c: mid(kit) - 600, w: 1400, kind: "open", top: 2400 },
+        { c: mid(lou), w: 1800, kind: "open", top: 2400 },
+        { c: mid(foy), w: 1800, kind: "open", top: 2400 },
+      ],
+    },
+    // partitions
+    { axis: "z", at: bed.x1, a: nz0, b: nz1, openings: [{ c: DEPTH - 1450, w: 900, kind: "door", swing: 1 }] }, // bedroom through to the wardrobe
+    { axis: "z", at: war.x1, a: nz0, b: nz1, openings: [] },
+    { axis: "z", at: kit.x1, a: sz0, b: sz1, openings: [{ c: sz0 + (DEPTH - 1200) / 2, w: DEPTH - 1200, kind: "open", top: 2400 }] }, // open-plan kitchen and lounge
+    { axis: "z", at: lou.x1, a: sz0, b: sz1, openings: [{ c: sz0 + 2400, w: 2600, kind: "open", top: 2400 }] }, // foyer opens to the lounge
+  ];
+  void war;
+
+  // the foyer and hall: console with art, a bench by the door, plants, runners
+  props.push(
+    { kind: "rug", pos: [mid(foy), 0, sz0 + 2600], rotY: 0, span: 2200 },
+    { kind: "console", pos: [foy.x1 - 200, 0, sz0 + 2400], rotY: -Math.PI / 2 },
+    { kind: "art", pos: [foy.x1 - 12, 1450, sz0 + 2400], rotY: -Math.PI / 2 },
+    { kind: "bench", pos: [mid(foy) - 1100, 0, sz1 - 350], rotY: Math.PI },
+    { kind: "plant", pos: [foy.x1 - 380, 0, sz1 - 380], rotY: 0 },
+    { kind: "runner", pos: [W / 2 - 1200, 0, (hz0 + hz1) / 2], rotY: 0, span: W - 4400 },
+    { kind: "art", pos: [mid(war), 1450, nz1 + T + 12], rotY: 0 },
+    { kind: "art", pos: [mid(war) + 1400, 1450, nz1 + T + 12], rotY: 0 },
+    { kind: "plant", pos: [380, 0, hz0 + 380], rotY: 0 },
+  );
+
   // centre the house on x = 0
-  const shift = -total / 2;
+  const shift = -W / 2;
   for (const pn of panels) pn.pos[0] += shift;
   for (const pr of props) pr.pos[0] += shift;
   for (const r of rooms) {
@@ -695,16 +902,32 @@ function home(s: Scheme): RoomSpec {
     r.x1 += shift;
     r.eye[0] += shift;
     r.look[0] += shift;
+    if (r.view) r.view.x += shift;
   }
-  const k = parts[0].spec;
+  for (const w of walls) {
+    if (w.axis === "x") {
+      w.a += shift;
+      w.b += shift;
+      for (const o of w.openings) o.c += shift;
+    } else w.at += shift;
+  }
+  const homeSpec: HomeSpec = {
+    walls,
+    halls: [{ x0: shift, x1: W + shift, z0: hz0, z1: hz1 }],
+    // just inside the front door, looking across the foyer into the lounge and kitchen
+    spawn: { x: mid(foy) + 300, z: sz1 - 1500, yaw: 1.72 },
+  };
+  const k = build.kitchen;
+  const kcx = mid(kit);
   return {
     panels,
     props,
     rooms,
-    bounds: { width: total, depth: HOME_DEPTH, height: 2700 },
-    focus: [0, 900, HOME_DEPTH / 2],
-    islandFocus: k.islandFocus ? [k.islandFocus[0] + rooms[0].x0 + (rooms[0].x1 - rooms[0].x0) / 2, k.islandFocus[1], k.islandFocus[2]] : undefined,
-    detailFocus: [k.detailFocus[0] + rooms[0].x0 + (rooms[0].x1 - rooms[0].x0) / 2, k.detailFocus[1], k.detailFocus[2]],
+    home: homeSpec,
+    bounds: { width: W, depth: sz1, height: 2700 },
+    focus: [0, 900, sz1 / 2],
+    islandFocus: k.islandFocus ? [kcx - k.islandFocus[0], k.islandFocus[1], sz1 - k.islandFocus[2]] : undefined,
+    detailFocus: [kcx - k.detailFocus[0], k.detailFocus[1], sz1 - k.detailFocus[2]],
     walls: { left: true, right: true },
   };
 }

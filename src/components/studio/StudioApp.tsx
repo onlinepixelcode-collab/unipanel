@@ -1,7 +1,7 @@
 "use client";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useStudio } from "@/lib/store/studio";
 import { useSampleBox } from "@/lib/store/sampleBox";
@@ -29,6 +29,9 @@ import { MOODS } from "@/components/three/Lighting";
 import { detectTier, hasWebGL, isMobile, type Tier } from "@/components/three/quality";
 import type { StudioHandle } from "@/components/three/StudioCanvas";
 import { FinishDrawer } from "./FinishDrawer";
+import { buildRoom } from "@/lib/studio/layout";
+import { homePlan, type HomePlan } from "@/lib/studio/homePlan";
+import { walkState, walkTo } from "@/components/three/walkState";
 import { asset } from "@/lib/asset";
 
 const StudioCanvas = dynamic(() => import("@/components/three/StudioCanvas"), { ssr: false });
@@ -78,6 +81,45 @@ export default function StudioApp() {
   const [busy, setBusy] = useState<string | null>(null);
   const [override, setOverride] = useState<import("@/lib/studio/scheme").Scheme | null>(null);
   const [otherImg, setOtherImg] = useState<string | null>(null);
+  const [roomToast, setRoomToast] = useState<{ name: string; n: number } | null>(null);
+
+  // the walkable home's plan (for the minimap and for walking to a room)
+  const homeSpec = useMemo(
+    () => (st.scheme.scene === "home" ? buildRoom(st.scheme) : null),
+    [st.scheme.scene, st.scheme.layout, st.scheme.buildup, st.scheme.handle, st.scheme.bookmatch], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const plan = useMemo(() => (homeSpec ? homePlan(homeSpec) : null), [homeSpec]);
+  const ROOM_ZONE: Zone[] = ["baseDoors", "cladding", "cladding", "wardrobeDoors", "baseDoors"];
+  const onRoomChange = useCallback(
+    (i: number) => {
+      const s0 = useStudio.getState();
+      s0.setCurrentRoom(i);
+      const name = i < 0 ? "Hallway" : plan?.rooms[i]?.name ?? "";
+      setRoomToast((t) => ({ name, n: (t?.n ?? 0) + 1 }));
+      if (i >= 0 && ROOM_ZONE[i]) s0.select(ROOM_ZONE[i]);
+    },
+    [plan], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  useEffect(() => {
+    if (!roomToast) return;
+    const t = setTimeout(() => setRoomToast(null), 2200);
+    return () => clearTimeout(t);
+  }, [roomToast]);
+  /** Walk (not jump) to a room: into its open front part, through the doorways. */
+  const goRoom = useCallback(
+    (i: number) => {
+      if (!plan) return;
+      const r = plan.rooms[i];
+      const hl = plan.halls[0];
+      const target: [number, number] = i < 0 ? [(hl.x0 + hl.x1) / 2, (hl.z0 + hl.z1) / 2] : [r.view.x, r.view.z];
+      const s0 = useStudio.getState();
+      if (s0.camera !== "walk") {
+        (walkState as typeof walkState & { pending?: [number, number, number] | null }).pending = [target[0], target[1], i < 0 ? Math.PI / 2 : r.view.yaw];
+        s0.setCamera("walk");
+      } else walkTo(target[0], target[1], i < 0 ? Math.PI / 2 : r.view.yaw);
+    },
+    [plan],
+  );
 
   // boot: device, tier, shared scheme from URL
   useEffect(() => {
@@ -88,6 +130,13 @@ export default function StudioApp() {
     const url = new URL(window.location.href);
     const s = decodeScheme(url.searchParams.get("s"));
     if (s) st.load(s);
+    // open on the light outside the visitor's window right now; they can change it any time
+    const asked = url.searchParams.get("mood") as Mood | null;
+    if (asked && asked in MOODS) st.setMood(asked);
+    else {
+      const h = new Date().getHours() + new Date().getMinutes() / 60;
+      st.setMood(h >= 6 && h < 16 ? "morning" : h >= 16 && h < 18.5 ? "golden" : h >= 18.5 && h < 20.5 ? "evening" : "night");
+    }
     const z = url.searchParams.get("zone") as Zone | null;
     const f = url.searchParams.get("finish");
     if (f && finishById(f)) {
@@ -504,18 +553,14 @@ export default function StudioApp() {
     </div>
   );
 
-  const HOME_ROOMS = ["Kitchen", "Lounge", "Bedroom & wardrobe", "Bathroom"];
   const homeBar = st.scheme.scene === "home" && (
-    <div className="glass flex items-center gap-1 rounded-full p-1">
-      <button onClick={() => st.setCamera("overview")} aria-pressed={st.camera !== "walk"} className={`h-9 whitespace-nowrap rounded-full px-3 text-[13px] ${st.camera !== "walk" ? "bg-porcelain text-ink" : "text-porcelain/85 hover:text-porcelain"}`}>
+    <div className="glass flex items-center gap-0.5 rounded-full p-1">
+      <button onClick={() => st.setCamera("walk")} aria-pressed={st.camera === "walk"} className={`h-9 whitespace-nowrap rounded-full px-3.5 text-[13px] ${st.camera === "walk" ? "bg-champagne text-ink" : "text-porcelain/85 hover:text-porcelain"}`}>
+        Walk
+      </button>
+      <button onClick={() => st.setCamera("overview")} aria-pressed={st.camera !== "walk"} className={`h-9 whitespace-nowrap rounded-full px-3.5 text-[13px] ${st.camera !== "walk" ? "bg-porcelain text-ink" : "text-porcelain/85 hover:text-porcelain"}`}>
         Dollhouse
       </button>
-      <span className="h-5 w-px bg-white/15" />
-      {HOME_ROOMS.map((r, i) => (
-        <button key={r} onClick={() => st.setHomeRoom(i)} aria-pressed={st.camera === "walk" && st.homeRoom === i} className={`h-9 whitespace-nowrap rounded-full px-3 text-[13px] ${st.camera === "walk" && st.homeRoom === i ? "bg-champagne text-ink" : "text-porcelain/85 hover:text-porcelain"}`}>
-          Walk: {r}
-        </button>
-      ))}
     </div>
   );
 
@@ -540,7 +585,7 @@ export default function StudioApp() {
     );
   };
   const walkPad = walking && (
-    <div className={`absolute z-20 h-36 w-36 ${mobile ? "bottom-[250px] left-3" : "bottom-6 left-6"}`} aria-label="Walk controls">
+    <div className={`absolute z-20 h-36 w-36 ${mobile ? "bottom-3 left-3 scale-[0.82] origin-bottom-left" : "hidden"}`} aria-label="Walk controls">
       {padBtn("w", "Walk forward", "left-12 top-0")}
       {padBtn("s", "Walk back", "bottom-0 left-12")}
       {padBtn("a", "Step left", "left-0 top-12")}
@@ -679,7 +724,8 @@ export default function StudioApp() {
     </button>
   );
 
-  const hint = st.scheme.scene === "home" && st.camera === "walk" ? "Drag to look around · W A S D or scroll to walk" : st.openMode ? "Click any door or drawer to open it · click the tap to run it" : "Drag to orbit · click a surface to change it · double-click a door to open it";
+  const homeWalk = st.scheme.scene === "home" && st.camera === "walk";
+  const hint = homeWalk ? "Drag to look · click the floor to walk there · W A S D or arrows · Shift to hurry" : st.openMode ? "Click any door or drawer to open it · click the tap to run it" : "Drag to orbit · click a surface to change it · double-click a door to open it";
 
   // ---- step contents ----
   const SectionLabel = ({ children }: { children: React.ReactNode }) => <p className="mb-2.5 text-[12px] uppercase tracking-[0.16em] text-stone-light">{children}</p>;
@@ -689,9 +735,10 @@ export default function StudioApp() {
       <div>
         <SectionLabel>Room</SectionLabel>
         <div className="grid grid-cols-3 gap-2">
-          {(Object.keys(SCENE_LABEL) as SceneId[]).map((s) => (
-            <button key={s} onClick={() => st.setScene(s)} aria-pressed={st.scheme.scene === s} className={`rounded-xl px-3 py-3 text-left text-[13px] transition-colors ${st.scheme.scene === s ? "bg-porcelain text-ink" : "bg-white/[0.05] text-porcelain/85 hover:bg-white/10"}`}>
-              {SCENE_LABEL[s]}
+          {(["home", "kitchen", "wardrobe", "media", "vanity"] as SceneId[]).map((s) => (
+            <button key={s} onClick={() => st.setScene(s)} aria-pressed={st.scheme.scene === s} className={`rounded-xl px-3 py-3 text-left text-[13px] transition-colors ${s === "home" ? "col-span-3 flex items-center justify-between" : ""} ${st.scheme.scene === s ? "bg-porcelain text-ink" : "bg-white/[0.05] text-porcelain/85 hover:bg-white/10"}`}>
+              <span>{s === "home" ? "Whole home · walk through it" : SCENE_LABEL[s]}</span>
+              {s === "home" && <span className="text-[12px] opacity-70">Kitchen, lounge, bedroom, wardrobe, bath</span>}
             </button>
           ))}
         </div>
@@ -934,7 +981,8 @@ export default function StudioApp() {
           camera={st.camera}
           cameraNonce={st.cameraNonce}
           homeRoom={st.homeRoom}
-          onRoom={(i) => st.setHomeRoom(i)}
+          onRoom={goRoom}
+          onRoomChange={onRoomChange}
           tier={tier}
           selected={selected}
           hovered={st.hovered}
@@ -1044,7 +1092,18 @@ export default function StudioApp() {
               </IconBtn>
             </div>
           </div>
-          <div className="absolute inset-x-3 bottom-3 z-10 flex justify-center">{cameraChips}</div>
+          {homeWalk && plan ? (
+            <div className="absolute bottom-3 right-3 z-10">
+              <Minimap plan={plan} current={st.currentRoom} onGo={goRoom} small />
+            </div>
+          ) : st.scheme.scene === "home" ? null : (
+            <div className="absolute inset-x-3 bottom-3 z-10 flex justify-center">{cameraChips}</div>
+          )}
+          {roomToast && homeWalk && (
+            <div key={roomToast.n} className="room-toast pointer-events-none absolute left-1/2 top-[30%] z-10 -translate-x-1/2 text-center">
+              <p className="display text-[30px] text-porcelain [text-shadow:0_2px_24px_rgba(0,0,0,.7)]">{roomToast.name}</p>
+            </div>
+          )}
         </div>
         <section aria-label="Studio controls" className="flex min-h-0 flex-1 flex-col rounded-t-3xl bg-[#161615] shadow-[0_-20px_40px_rgba(0,0,0,.4)]">
           <div className="px-5 pt-4">
@@ -1082,11 +1141,17 @@ export default function StudioApp() {
           {stageTopLeft}
           {stageTopRight}
         </div>
+        {roomToast && homeWalk && (
+          <div key={roomToast.n} className="room-toast pointer-events-none absolute left-1/2 top-[18%] z-10 -translate-x-1/2 text-center">
+            <p className="eyebrow text-champagne">You are in the</p>
+            <p className="display mt-1 text-[clamp(2rem,4vw,3.4rem)] text-porcelain [text-shadow:0_2px_30px_rgba(0,0,0,.6)]">{roomToast.name}</p>
+          </div>
+        )}
         {/* bottom-left: the selected surface and the camera views; bottom-right stays clear for the concierge */}
         <div className="pointer-events-none absolute bottom-4 left-4 right-48 z-10 flex flex-col items-start gap-2 [&>*]:pointer-events-auto">
           {selectedCard}
-          {cameraChips}
-          <p className="caption pointer-events-none hidden pl-2 text-[12px] text-porcelain/55 2xl:block">{hint}</p>
+          {homeWalk && plan ? <Minimap plan={plan} current={st.currentRoom} onGo={goRoom} /> : st.scheme.scene === "home" ? null : cameraChips}
+          <p className="caption pointer-events-none hidden pl-2 text-[12px] text-porcelain/55 xl:block">{hint}</p>
         </div>
       </div>
       {/* the guided panel */}
@@ -1104,6 +1169,63 @@ export default function StudioApp() {
         </div>
         {footer}
       </aside>
+    </div>
+  );
+}
+
+/** A live floor plan of the home: you-are-here dot with a view cone; click a room to walk there. */
+function Minimap({ plan, current, onGo, small }: { plan: HomePlan; current: number; onGo: (i: number) => void; small?: boolean }) {
+  const dot = useRef<SVGGElement>(null);
+  const pad = 0.3;
+  const { box } = plan;
+  const w = box.x1 - box.x0 + pad * 2;
+  const h = box.z1 - box.z0 + pad * 2;
+  const W = small ? 140 : 240;
+  const k = W / w;
+  const H = h * k;
+  const X = (x: number) => (x - box.x0 + pad) * k;
+  const Z = (z: number) => (z - box.z0 + pad) * k;
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      if (dot.current) dot.current.setAttribute("transform", `translate(${X(walkState.x)} ${Z(walkState.z)}) rotate(${(-walkState.yaw * 180) / Math.PI})`);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  });
+  return (
+    <div className="glass rounded-2xl p-2.5">
+      {!small && (
+        <div className="mb-1.5 flex items-center justify-between px-1 text-[12px]">
+          <span className="uppercase tracking-[0.14em] text-stone-light">Floor plan</span>
+          <span className="text-porcelain">{current < 0 ? "Hallway" : plan.rooms[current]?.name}</span>
+        </div>
+      )}
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Floor plan of the home">
+        {plan.rooms.map((r, i) => (
+          <g key={r.name} onClick={() => onGo(i)} className="cursor-pointer">
+            <rect x={X(r.x0)} y={Z(r.z0)} width={(r.x1 - r.x0) * k} height={(r.z1 - r.z0) * k} fill={current === i ? "rgba(228,192,32,.22)" : "rgba(255,255,255,.06)"} className="transition-colors hover:fill-[rgba(255,255,255,.14)]" />
+            {!small && (
+              <text x={X((r.x0 + r.x1) / 2)} y={Z((r.z0 + r.z1) / 2) + 3} textAnchor="middle" fontSize="8.5" fill="rgba(244,241,236,.8)" style={{ pointerEvents: "none" }}>
+                {r.name.replace("Walk-in ", "")}
+              </text>
+            )}
+          </g>
+        ))}
+        {plan.halls.map((hl, i) => (
+          <rect key={`h${i}`} x={X(hl.x0)} y={Z(hl.z0)} width={(hl.x1 - hl.x0) * k} height={(hl.z1 - hl.z0) * k} fill={current < 0 ? "rgba(228,192,32,.18)" : "rgba(255,255,255,.035)"} onClick={() => onGo(-1)} className="cursor-pointer" />
+        ))}
+        {plan.walls
+          .filter((wl) => wl.y0 < 1)
+          .map((wl, i) => (
+            <rect key={i} x={X(wl.x0)} y={Z(wl.z0)} width={Math.max(1, (wl.x1 - wl.x0) * k)} height={Math.max(1, (wl.z1 - wl.z0) * k)} fill="rgba(244,241,236,.85)" style={{ pointerEvents: "none" }} />
+          ))}
+        <g ref={dot} style={{ pointerEvents: "none" }}>
+          <path d="M0 0 L-11 -22 A 24 24 0 0 1 11 -22 Z" fill="rgba(228,192,32,.35)" />
+          <circle r="4" fill="#e4c020" stroke="#0e0e0d" strokeWidth="1.5" />
+        </g>
+      </svg>
     </div>
   );
 }

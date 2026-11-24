@@ -5,10 +5,12 @@ import { useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { Edges, Html, MeshReflectorMaterial } from "@react-three/drei";
 import { asset } from "@/lib/asset";
 import { startWater, stopWater } from "@/lib/audio/water";
+import { homePlan, WALL, DOOR_H, type DoorLeaf, type WindowPane } from "@/lib/studio/homePlan";
+import { walkState } from "./walkState";
 import type { Panel, RoomSpec } from "@/lib/studio/layout";
 import type { Scheme, Zone } from "@/lib/studio/scheme";
 import { STAGING } from "@/lib/studio/scheme";
-import { getFinishMaterial, getStagingMaterial, type Quality } from "./materials";
+import { getFinishMaterial, getStagingMaterial, plaster, type Quality } from "./materials";
 
 const MM = 0.001;
 
@@ -74,7 +76,7 @@ function stagingMaterial(p: Panel, s: Scheme) {
     case "tv":
       return getStagingMaterial("tv", "#050505", { roughness: 0.15, clearcoat: 1 });
     case "bulkhead":
-      return getStagingMaterial("wall", STAGING.walls[s.wall].color, { roughness: 0.92 });
+      return plaster(getStagingMaterial("wall", STAGING.walls[s.wall].color, { roughness: 0.92 }));
     case "led":
       return getStagingMaterial("led", "#fff4e0", { emissive: new THREE.Color("#fff1d6"), emissiveIntensity: 2.4, roughness: 1 });
     case "basin":
@@ -616,12 +618,82 @@ function loadMarble(): Promise<HTMLImageElement> {
   });
 }
 
+/** Real oak: the grain of a wood-veneer scan, remapped onto natural oak tones (light ground, darker figure). */
+let oakCanvas: HTMLCanvasElement | null = null;
+let oakLoading: Promise<HTMLCanvasElement | null> | null = null;
+function loadOak(): Promise<HTMLCanvasElement | null> {
+  if (oakCanvas) return Promise.resolve(oakCanvas);
+  oakLoading ??= new Promise((res) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      const c = document.createElement("canvas");
+      c.width = img.naturalWidth;
+      c.height = img.naturalHeight;
+      const g = c.getContext("2d")!;
+      g.drawImage(img, 0, 0);
+      const d = g.getImageData(0, 0, c.width, c.height);
+      const px = d.data;
+      // luminance range (2nd–98th percentile) so the figure uses the full tone range
+      const hist = new Uint32Array(256);
+      for (let i = 0; i < px.length; i += 4) hist[Math.round(0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2])]++;
+      const total = px.length / 4;
+      let acc = 0, lo = 0, hi = 255;
+      for (let v = 0; v < 256; v++) {
+        acc += hist[v];
+        if (acc < total * 0.02) lo = v;
+        if (acc < total * 0.98) hi = v;
+      }
+      const light = [214, 182, 140], dark = [150, 108, 70];
+      for (let i = 0; i < px.length; i += 4) {
+        const l = (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2] - lo) / Math.max(1, hi - lo);
+        // the scan's light grain lines become oak's darker figure
+        const t = Math.min(1, Math.max(0, 0.22 + l * 0.85));
+        for (let k = 0; k < 3; k++) px[i + k] = light[k] + (dark[k] - light[k]) * t;
+      }
+      g.putImageData(d, 0, 0);
+      oakCanvas = c;
+      res(c);
+    };
+    img.onerror = () => res(null);
+    img.src = asset("/tex/sherwood-so71.jpg");
+  });
+  return oakLoading;
+}
+
+/** Draw one board from the oak scan into a rectangle, random crop and tone, with a fine bevelled joint. */
+function oakBoard(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, horiz: boolean, rnd: () => number) {
+  const src = oakCanvas!;
+  g.save();
+  g.beginPath();
+  g.rect(x, y, w, h);
+  g.clip();
+  // the grain always runs along the board
+  const along = horiz ? w : h, across = horiz ? h : w;
+  // a strip of the scan in the board's proportions (about 16% of the panel's width per board)
+  const sw = src.width * 0.16;
+  const sh = Math.min(src.height, sw * (along / across));
+  const sx = rnd() * (src.width - sw);
+  const sy = rnd() * Math.max(0, src.height - sh);
+  g.translate(x + w / 2, y + h / 2);
+  if (horiz) g.rotate(Math.PI / 2);
+  if (rnd() > 0.5) g.scale(-1, 1);
+  g.drawImage(src, sx, sy, sw, sh, -across / 2, -along / 2, across, along);
+  g.restore();
+  // board-to-board tone variation, then the joint
+  g.fillStyle = `rgba(${rnd() > 0.5 ? "255,240,220" : "80,50,25"},${0.04 + rnd() * 0.08})`;
+  g.fillRect(x, y, w, h);
+  g.strokeStyle = "rgba(60,38,18,.55)";
+  g.lineWidth = 1.5;
+  g.strokeRect(x + 0.75, y + 0.75, w - 1.5, h - 1.5);
+}
+
 function floorTexture(kind: number, base: string) {
-  const ready = kind === 4 && !!marbleImg?.complete && !!marbleImg.naturalWidth;
+  const ready = (kind === 4 && !!marbleImg?.complete && !!marbleImg.naturalWidth) || ((kind === 0 || kind === 5) && !!oakCanvas);
   const ck = `${kind}${ready ? "r" : ""}`;
   const hit = floorTexCache.get(ck);
   if (hit) return hit;
-  const size = kind >= 3 ? 2048 : 1024;
+  const size = kind >= 3 || (kind === 0 && ready) ? 2048 : 1024;
   const c = document.createElement("canvas");
   c.width = c.height = size;
   const g = c.getContext("2d")!;
@@ -631,7 +703,20 @@ function floorTexture(kind: number, base: string) {
   const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
   g.fillStyle = shade(1);
   g.fillRect(0, 0, size, size);
-  if (kind === 0) {
+  if (kind === 0 && ready) {
+    // 2m × 2m tile of 180mm oak boards cut from a real wood scan, staggered joints
+    const plank = size / 11;
+    for (let i = 0; i < 11; i++) {
+      let y = -rnd() * size;
+      while (y < size) {
+        const len = size * (0.35 + rnd() * 0.45);
+        oakBoard(g, i * plank, y, plank, len, false, rnd);
+        // wrap so the texture tiles seamlessly
+        if (y + len > size) oakBoard(g, i * plank, y - size, plank, len, false, rnd);
+        y += len;
+      }
+    }
+  } else if (kind === 0) {
     // 2m × 2m tile of 180mm oak planks, staggered joints, fine grain
     const plank = size / 11;
     for (let i = 0; i < 11; i++) {
@@ -720,6 +805,7 @@ function floorTexture(kind: number, base: string) {
     g.fillStyle = "#6e5236";
     g.fillRect(0, 0, size, size);
     const plank = (x: number, y: number, pw: number, ph: number, horiz: boolean) => {
+      if (ready) return oakBoard(g, x, y, pw, ph, horiz, rnd);
       const k = 0.86 + rnd() * 0.26;
       g.fillStyle = shade(k);
       g.fillRect(x + 1, y + 1, pw - 2, ph - 2);
@@ -767,6 +853,7 @@ function Floor({ kind, w, d, cx, cz, shadows, reflect }: { kind: number; w: numb
   const [, setReady] = useState(0);
   useEffect(() => {
     if (kind === 4) loadMarble().then(() => setReady((n) => n + 1));
+    if (kind === 0 || kind === 5) loadOak().then(() => setReady((n) => n + 1));
   }, [kind]);
   const invalidate = useThree((st) => st.invalidate);
   const tile = FLOOR_TILE[kind] ?? 2;
@@ -786,15 +873,17 @@ function Floor({ kind, w, d, cx, cz, shadows, reflect }: { kind: number; w: numb
     invalidate();
     return () => map.dispose();
   }, [map, invalidate]);
-  const polished = kind === 3 || kind === 4;
+  // polished tile and marble mirror the room; lacquered wood gives a soft, blurred sheen
+  const polished = kind === 3 || kind === 4 || kind === 0 || kind === 5;
+  const wood = kind === 0 || kind === 5;
   const plain = useMemo(
     () =>
       new THREE.MeshPhysicalMaterial({
         map,
         color: kind >= 3 ? "#dcdad5" : "#ffffff",
-        roughness: kind === 4 ? 0.12 : kind === 3 ? 0.22 : kind === 2 ? 0.5 : kind === 5 ? 0.5 : 0.62,
-        clearcoat: kind === 4 ? 0.8 : kind === 3 ? 0.5 : kind === 0 ? 0.15 : kind === 5 ? 0.3 : 0,
-        clearcoatRoughness: kind >= 3 ? 0.06 : 0.5,
+        roughness: kind === 4 ? 0.12 : kind === 3 ? 0.22 : kind === 2 ? 0.5 : kind === 0 || kind === 5 ? 0.48 : 0.62,
+        clearcoat: kind === 4 ? 0.8 : kind === 3 ? 0.5 : kind === 0 || kind === 5 ? 0.35 : 0,
+        clearcoatRoughness: kind >= 3 && kind !== 5 ? 0.06 : 0.28,
       }),
     [map, kind],
   );
@@ -811,18 +900,18 @@ function Floor({ kind, w, d, cx, cz, shadows, reflect }: { kind: number; w: numb
           <MeshReflectorMaterial
             map={map}
             resolution={1024}
-            blur={kind === 4 ? [300, 90] : [420, 160]}
+            blur={kind === 4 ? [300, 90] : wood ? [700, 260] : [420, 160]}
             mixBlur={1}
-            mixStrength={kind === 4 ? 0.42 : 0.26}
+            mixStrength={kind === 4 ? 0.42 : wood ? 0.14 : 0.26}
             mixContrast={1.1}
             mirror={0}
             depthScale={1.4}
             minDepthThreshold={0.25}
             maxDepthThreshold={1.2}
             depthToBlurRatioBias={0.2}
-            roughness={kind === 4 ? 0.16 : 0.26}
+            roughness={kind === 4 ? 0.16 : wood ? 0.45 : 0.26}
             metalness={0}
-            color="#dcdad5"
+            color={wood ? "#ffffff" : "#dcdad5"}
           />
         </mesh>
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[cx, 0, cz]} material={plain} onUpdate={(m) => m.layers.set(1)}>
@@ -841,7 +930,7 @@ function Floor({ kind, w, d, cx, cz, shadows, reflect }: { kind: number; w: numb
 /** Light fittings follow the switch: downlights, LED strips and pendants glow; the ceiling and window follow day or night. */
 function useFittings(lightsOn: boolean, night: boolean) {
   const invalidate = useThree((st) => st.invalidate);
-  const ceiling = getStagingMaterial("ceiling", "#f2f1ee", { roughness: 0.95, emissive: new THREE.Color("#e9e7e2"), emissiveIntensity: 0.42 });
+  const ceiling = plaster(getStagingMaterial("ceiling", "#f2f1ee", { roughness: 0.95, emissive: new THREE.Color("#e9e7e2"), emissiveIntensity: 0.42 }));
   const downlight = getStagingMaterial("downlight", "#ffffff", { emissive: new THREE.Color("#fff6e6"), emissiveIntensity: 3, roughness: 1 });
   const sky = getStagingMaterial("sky", "#ffffff", { emissive: new THREE.Color("#eef3f8"), emissiveIntensity: 1.6, roughness: 1 });
   const led = getStagingMaterial("led", "#fff4e0", { emissive: new THREE.Color("#fff1d6"), emissiveIntensity: 2.4, roughness: 1 });
@@ -899,11 +988,17 @@ function LightSwitch({ position, rotation, on, onToggle }: { position: [number, 
 /** Downlight grid shared by the shell (fittings) and RoomLights (light sources), metres. */
 export function downlightPoints(room: RoomSpec): [number, number][] {
   if (room.rooms) {
-    return room.rooms.flatMap((r) => {
-      const a = r.x0 * MM, b = r.x1 * MM;
+    const pts = room.rooms.flatMap((r) => {
+      const a = r.x0 * MM, b = r.x1 * MM, z0 = r.z0 * MM, z1 = r.z1 * MM;
       const cols = Math.max(2, Math.round((b - a) / 1.4));
-      return Array.from({ length: cols }, (_, i) => [1.2, 3.0].map((z) => [a + ((b - a) / cols) * (i + 0.5), z] as [number, number])).flat();
+      const rows = [z0 + (z1 - z0) * 0.27, z0 + (z1 - z0) * 0.68];
+      return Array.from({ length: cols }, (_, i) => rows.map((z) => [a + ((b - a) / cols) * (i + 0.5), z] as [number, number])).flat();
     });
+    for (const h of room.home?.halls ?? []) {
+      const hz = ((h.z0 + h.z1) / 2) * MM;
+      for (let x = h.x0 * MM + 1; x < h.x1 * MM - 0.5; x += 2.4) pts.push([x, hz]);
+    }
+    return pts;
   }
   const W = room.bounds.width * MM + 0.6;
   const cols = Math.max(3, Math.round(W / 1.2));
@@ -913,91 +1008,163 @@ export function downlightPoints(room: RoomSpec): [number, number][] {
 }
 
 export interface ShellLights {
+  /** dollhouse view: cut the front outer wall down so the rooms can be seen */
+  cutaway?: boolean;
   lightsOn?: boolean;
   night?: boolean;
   onLights?: () => void;
   reflect?: boolean;
 }
 
-/** Whole-home shell: one floor and ceiling, outer walls, and partitions with a doorway between rooms. */
-function HomeShell({ room, scheme, shadows, onRoom, labels, lightsOn = false, night = false, onLights, reflect = false }: { room: RoomSpec; scheme: Scheme; shadows: boolean; onRoom?: (i: number) => void; labels?: boolean } & ShellLights) {
-  const rooms = room.rooms!;
-  const H = room.bounds.height * MM;
-  const D = room.bounds.depth * MM;
-  const x0 = rooms[0].x0 * MM;
-  const x1 = rooms[rooms.length - 1].x1 * MM;
-  const W = x1 - x0;
-  const wall = getStagingMaterial("wall", STAGING.walls[scheme.wall].color, { roughness: 0.92 });
-  const { ceiling, downlight } = useFittings(lightsOn, night);
-  const T = 0.12; // wall thickness
-  const cap = getStagingMaterial("wallcap", "#141413", { roughness: 0.8 });
-  const DOOR_Z0 = D - 2.0;
-  const DOOR_Z1 = D - 1.0;
-  const DOOR_H = 2.1;
-  const parts: { x: number; z0: number; z1: number; y0: number; y1: number }[] = [];
-  rooms.slice(0, -1).forEach((r) => {
-    const x = r.x1 * MM + T / 2;
-    parts.push({ x, z0: 0, z1: DOOR_Z0, y0: 0, y1: H }, { x, z0: DOOR_Z1, z1: D, y0: 0, y1: H }, { x, z0: DOOR_Z0, z1: DOOR_Z1, y0: DOOR_H, y1: H });
+/** A door leaf in the house: hangs from its hinge, swings open as the visitor comes near. */
+function HouseDoor({ leaf, scheme }: { leaf: DoorLeaf; scheme: Scheme }) {
+  const g = useRef<THREE.Group>(null);
+  const t = useRef(0.35);
+  const invalidate = useThree((st) => st.invalidate);
+  const mat = getFinishMaterial(scheme.zones.wardrobeDoors, "v", "high");
+  const handle = getStagingMaterial("chrome", "#eceeef", { metalness: 1, roughness: 0.1 });
+  const frame = getStagingMaterial("door-frame", STAGING.walls[scheme.wall].color, { roughness: 0.6 });
+  const cx = leaf.axis === "x" ? leaf.hx + leaf.w / 2 : leaf.hx;
+  const cz = leaf.axis === "z" ? leaf.hz + leaf.w / 2 : leaf.hz;
+  useFrame((_, dt) => {
+    // open when the visitor is close; in the dollhouse view doors stand open so the plan reads
+    const near = !walkState.active || Math.hypot(walkState.x - cx, walkState.z - cz) < 2.1;
+    const target = near ? 1 : 0;
+    const k = 1 - Math.exp(-dt * 5);
+    t.current += (target - t.current) * k;
+    if (Math.abs(target - t.current) > 0.002) invalidate();
+    if (g.current) g.current.rotation.y = leaf.swing * t.current * 1.6;
   });
+  const along = leaf.axis === "x" ? 0 : -Math.PI / 2;
+  return (
+    <group position={[leaf.hx, 0, leaf.hz]} rotation={[0, along, 0]}>
+      {/* architrave around the opening */}
+      {[
+        [-0.03, DOOR_H / 2, 0.04, DOOR_H + 0.06],
+        [leaf.w + 0.03, DOOR_H / 2, 0.04, DOOR_H + 0.06],
+        [leaf.w / 2, DOOR_H + 0.03, leaf.w + 0.1, 0.04],
+      ].map(([x, y, w, h], i) => (
+        <mesh key={i} position={[x, y, 0]} material={frame} castShadow>
+          <boxGeometry args={[w, h, WALL + 0.02]} />
+        </mesh>
+      ))}
+      <group ref={g}>
+        <mesh position={[leaf.w / 2, DOOR_H / 2 - 0.005, 0]} material={mat} castShadow receiveShadow>
+          <boxGeometry args={[leaf.w - 0.01, DOOR_H - 0.02, 0.04]} />
+        </mesh>
+        {[0.035, -0.035].map((z) => (
+          <mesh key={z} position={[leaf.w - 0.08, 1.02, z]} rotation={[0, 0, Math.PI / 2]} material={handle} castShadow>
+            <cylinderGeometry args={[0.009, 0.009, 0.13, 12]} />
+          </mesh>
+        ))}
+      </group>
+    </group>
+  );
+}
+
+/** A window: frame, mullion and a bright pane (dark blue at night). */
+function HouseWindow({ w: win, frameMat, sky }: { w: WindowPane; frameMat: THREE.Material; sky: THREE.Material }) {
+  const rotY = win.axis === "x" ? 0 : Math.PI / 2;
+  const h = win.y1 - win.y0;
+  return (
+    <group position={[win.x, (win.y0 + win.y1) / 2, win.z]} rotation={[0, rotY, 0]}>
+      <mesh material={sky}>
+        <planeGeometry args={[win.w, h]} />
+      </mesh>
+      <mesh material={sky} rotation={[0, Math.PI, 0]}>
+        <planeGeometry args={[win.w, h]} />
+      </mesh>
+      {[
+        [0, h / 2, win.w + 0.06, 0.05],
+        [0, -h / 2, win.w + 0.06, 0.05],
+        [-win.w / 2, 0, 0.05, h],
+        [win.w / 2, 0, 0.05, h],
+        [0, 0, 0.03, h],
+      ].map(([x, y, ww, hh], i) => (
+        <mesh key={i} position={[x, y, 0]} material={frameMat} castShadow>
+          <boxGeometry args={[ww, hh, WALL + 0.03]} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+/** The walkable home: rooms off a hallway, solid walls with doorways, doors, windows and lights. */
+function HomeShell({ room, scheme, shadows, onRoom, labels, lightsOn = false, night = false, onLights, reflect = false, cutaway = false }: { room: RoomSpec; scheme: Scheme; shadows: boolean; onRoom?: (i: number) => void; labels?: boolean } & ShellLights) {
+  const plan = useMemo(() => homePlan(room), [room]);
+  const wall = plaster(getStagingMaterial("wall", STAGING.walls[scheme.wall].color, { roughness: 0.92 }));
+  const outerWall = plaster(getStagingMaterial("outer-wall", "#d8d4cc", { roughness: 0.9 }));
+  const cap = getStagingMaterial("wallcap", "#141413", { roughness: 0.8 });
+  const frameMat = getStagingMaterial("frame", "#2a2a2a", { roughness: 0.4, metalness: 0.6 });
+  const skirting = getStagingMaterial("skirting", STAGING.walls[scheme.wall].color, { roughness: 0.6 });
+  const { ceiling, downlight, sky } = useFittings(lightsOn, night);
+  if (!plan) return null;
+  const { H, box } = plan;
+  const W = box.x1 - box.x0;
+  const depth = box.z1 - box.z0;
+  const front = box.z1 - WALL; // the outer wall facing the dollhouse camera
+  const CUT = 0.9;
+  const isFront = (w: { outer?: boolean; z0: number }) => !!w.outer && w.z0 >= front - 0.01;
+  const walls = cutaway ? plan.walls.flatMap((w) => (isFront(w) ? (w.y0 >= CUT ? [] : [{ ...w, y1: Math.min(w.y1, CUT) }]) : [w])) : plan.walls;
+  const windows = cutaway ? plan.windows.filter((w) => !(w.axis === "x" && w.z >= front - 0.01)) : plan.windows;
+  const cxH = (box.x0 + box.x1) / 2, czH = (box.z0 + box.z1) / 2;
   return (
     <group>
-      <Floor kind={scheme.floor} w={W} d={D} cx={(x0 + x1) / 2} cz={D / 2} shadows={shadows} reflect={reflect} />
-      {/* front wall: seen only by the reflection probe (layer 1), so glossy fronts reflect a closed room */}
-      <mesh position={[(x0 + x1) / 2, H / 2, D]} rotation={[0, Math.PI, 0]} material={wall} onUpdate={(m) => m.layers.set(1)}>
-        <planeGeometry args={[W, H]} />
+      <Floor kind={scheme.floor} w={W} d={depth} cx={cxH} cz={czH} shadows={shadows} reflect={reflect} />
+      {/* slab edge under the floor, kept just below it so the two never fight for the same depth */}
+      <mesh position={[cxH, -0.103, czH]} material={cap}>
+        <boxGeometry args={[W, 0.2, depth]} />
       </mesh>
-      {rooms.map((r) => (
-        <LightSwitch key={`sw${r.id}`} position={[r.x1 * MM - 0.006, 1.1, DOOR_Z0 - 0.3]} rotation={[0, -Math.PI / 2, 0]} on={lightsOn} onToggle={onLights} />
-      ))}
-      {/* slab edge under the floor, like an architectural cut-away */}
-      <mesh position={[(x0 + x1) / 2, -0.1, D / 2]} material={cap}>
-        <boxGeometry args={[W + T * 2, 0.2, D + T]} />
+      {/* ceiling faces down (invisible from the dollhouse view) and blocks the sun */}
+      <mesh position={[cxH, H, czH]} rotation={[Math.PI / 2, 0, 0]} material={ceiling} castShadow={shadows}>
+        <planeGeometry args={[W, depth]} />
       </mesh>
-      {/* back wall with thickness and a dark cap */}
-      <mesh position={[(x0 + x1) / 2, H / 2, -T / 2 - 0.001]} receiveShadow={shadows} material={wall}>
-        <boxGeometry args={[W + T * 2, H, T]} />
-      </mesh>
-      <mesh position={[(x0 + x1) / 2, H + 0.01, -T / 2]} material={cap}>
-        <boxGeometry args={[W + T * 2, 0.02, T]} />
-      </mesh>
-      <mesh position={[(x0 + x1) / 2, H, D / 2]} rotation={[Math.PI / 2, 0, 0]} material={ceiling}>
-        <planeGeometry args={[W, D]} />
-      </mesh>
-      {[x0 - T / 2, x1 + T / 2].map((x, i) => (
+      {walls.map((w, i) => (
         <group key={i}>
-          <mesh position={[x, H / 2, D / 2]} receiveShadow={shadows} material={wall}>
-            <boxGeometry args={[T, H, D]} />
+          <mesh position={[(w.x0 + w.x1) / 2, (w.y0 + w.y1) / 2, (w.z0 + w.z1) / 2]} material={w.outer ? outerWall : wall} castShadow={shadows} receiveShadow={shadows}>
+            <boxGeometry args={[w.x1 - w.x0, w.y1 - w.y0, w.z1 - w.z0]} />
           </mesh>
-          <mesh position={[x, H + 0.01, D / 2]} material={cap}>
-            <boxGeometry args={[T, 0.02, D]} />
-          </mesh>
-        </group>
-      ))}
-      {parts.map((p, i) => (
-        <group key={i}>
-          <mesh position={[p.x, (p.y0 + p.y1) / 2, (p.z0 + p.z1) / 2]} material={wall} receiveShadow={shadows} castShadow={false}>
-            <boxGeometry args={[T, p.y1 - p.y0, p.z1 - p.z0]} />
-          </mesh>
-          {p.y1 >= H - 0.001 && p.y0 === 0 && (
-            <mesh position={[p.x, H + 0.01, (p.z0 + p.z1) / 2]} material={cap}>
-              <boxGeometry args={[T, 0.02, p.z1 - p.z0]} />
+          {(w.y1 >= H - 0.001 || (cutaway && isFront(w))) && (
+            <mesh position={[(w.x0 + w.x1) / 2, w.y1 + 0.01, (w.z0 + w.z1) / 2]} material={cap}>
+              <boxGeometry args={[w.x1 - w.x0 + 0.002, 0.02, w.z1 - w.z0 + 0.002]} />
+            </mesh>
+          )}
+          {w.y0 === 0 && !w.outer && (w.x1 - w.x0 > 0.3 || w.z1 - w.z0 > 0.3) && (
+            <mesh position={[(w.x0 + w.x1) / 2, 0.04, (w.z0 + w.z1) / 2]} material={skirting}>
+              <boxGeometry args={[w.x1 - w.x0 + 0.02, 0.08, w.z1 - w.z0 + 0.02]} />
             </mesh>
           )}
         </group>
       ))}
-      {labels &&
-        rooms.map((r, i) => (
-          <Html key={r.id} position={[((r.x0 + r.x1) / 2) * MM, H + 0.35, D * 0.55]} center zIndexRange={[20, 0]}>
-            <button onClick={() => onRoom?.(i)} className="whitespace-nowrap rounded-full bg-black/70 px-3.5 py-1.5 text-[13px] text-porcelain ring-1 ring-white/20 backdrop-blur transition-colors hover:bg-champagne hover:text-ink">
-              {r.name} · walk in
-            </button>
-          </Html>
-        ))}
+      {plan.leaves.map((l, i) => (
+        <HouseDoor key={i} leaf={l} scheme={scheme} />
+      ))}
+      {windows.map((w, i) => (
+        <HouseWindow key={i} w={w} frameMat={frameMat} sky={sky} />
+      ))}
       {downlightPoints(room).map(([x, z], i) => (
         <mesh key={`dl${i}`} position={[x, H - 0.002, z]} rotation={[Math.PI / 2, 0, 0]} material={downlight}>
           <circleGeometry args={[0.045, 20]} />
         </mesh>
       ))}
+      {/* a light switch beside every opening into the hall, on the hall side */}
+      {plan.portals
+        .filter((p) => p.a === -1 || p.b === -1)
+        .map((p, i) => {
+          const hallSide = p.b === -1 ? 1 : -1; // along the normal
+          const off = WALL / 2 + 0.006;
+          const pos: [number, number, number] = p.nz ? [p.x + 0.95, 1.1, p.z + hallSide * off] : [p.x + hallSide * off, 1.1, p.z + 0.95];
+          const rot: [number, number, number] = p.nz ? [0, hallSide > 0 ? 0 : Math.PI, 0] : [0, hallSide > 0 ? Math.PI / 2 : -Math.PI / 2, 0];
+          return <LightSwitch key={`sw${i}`} position={pos} rotation={rot} on={lightsOn} onToggle={onLights} />;
+        })}
+      {labels &&
+        plan.rooms.map((r, i) => (
+          <Html key={r.name} position={[(r.x0 + r.x1) / 2, H + 0.35, (r.z0 + r.z1) / 2]} center zIndexRange={[20, 0]}>
+            <button onClick={() => onRoom?.(i)} className="whitespace-nowrap rounded-full bg-black/70 px-3.5 py-1.5 text-[13px] text-porcelain ring-1 ring-white/20 backdrop-blur transition-colors hover:bg-champagne hover:text-ink">
+              {r.name} · walk in
+            </button>
+          </Html>
+        ))}
     </group>
   );
 }
@@ -1012,7 +1179,7 @@ function SingleRoomShell({ room, scheme, shadows = true, lightsOn = false, night
   const W = width * MM + 0.6;
   const FW = W + 8;
   const FD = depth * MM + 8;
-  const wall = getStagingMaterial("wall", STAGING.walls[scheme.wall].color, { roughness: 0.92 });
+  const wall = plaster(getStagingMaterial("wall", STAGING.walls[scheme.wall].color, { roughness: 0.92 }));
   const { ceiling, downlight, sky } = useFittings(lightsOn, night);
   const H = height * MM;
   const D = depth * MM;
