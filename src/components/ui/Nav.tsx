@@ -10,11 +10,14 @@ import { ShowroomStatus } from "./ShowroomStatus";
 const MENU_MATERIALS = ["nuvola-03", "calacatta-bianco", "champagne-metal", "oxid-nero-real-stone", "nogal-rosales-02", "loom-ah7", "satin-kashmir-glass", "verde-salvia", "firestone", "kashmir", "black-8102"];
 
 export function Logo({ dark }: { dark: boolean }) {
-  // The real marks: white wordmark on dark surfaces, the black circle on light ones.
+  // The real wordmark, large: on its own over dark surfaces, on the brand's black (as in the
+  // circle mark) over light ones, so the name stays readable at full size.
   return dark ? (
-    <img src={asset("/brand/Logo_UNIPANEL_white.png")} alt="UnipanelSA, Luxury European Surfaces" width={150} height={30} className="h-[26px] w-auto" />
+    <img src={asset("/brand/Logo_UNIPANEL_white.png")} alt="UnipanelSA, Luxury European Surfaces" width={150} height={30} className="h-[32px] w-auto sm:h-[40px]" />
   ) : (
-    <img src={asset("/brand/LOGO-Black-circle.png")} alt="UnipanelSA, Luxury European Surfaces" width={56} height={56} className="h-[54px] w-[54px] scale-[1.35]" />
+    <span className="flex items-center rounded-full bg-[radial-gradient(circle_at_30%_30%,#262626,#0b0b0b)] px-4 py-2.5 shadow-[0_6px_20px_-8px_rgba(0,0,0,.45)] sm:px-5 sm:py-3">
+      <img src={asset("/brand/Logo_UNIPANEL_white.png")} alt="UnipanelSA, Luxury European Surfaces" width={150} height={30} className="h-[26px] w-auto sm:h-[32px]" />
+    </span>
   );
 }
 
