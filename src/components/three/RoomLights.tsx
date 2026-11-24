@@ -249,9 +249,9 @@ function Spot({ x, y, z, shadow, size }: { x: number; y: number; z: number; shad
  * `all` lights every window (used for photo rendering, where each window is a real light source).
  */
 const WINDOW_LIGHT: Record<string, { color: string; base: number }> = {
-  gallery: { color: "#ffffff", base: 3.5 },
-  morning: { color: "#ffffff", base: 7 },
-  golden: { color: "#ffc98e", base: 6 },
+  gallery: { color: "#ffffff", base: 3 },
+  morning: { color: "#ffffff", base: 5 },
+  golden: { color: "#ffc98e", base: 4.5 },
   evening: { color: "#c9a07a", base: 0.9 },
   night: { color: "#6f86b0", base: 0.3 },
 };

@@ -12,11 +12,11 @@ import { bumpShadows } from "./shadowState";
  * the key light angle and the overall exposure; transitions are smoothed per frame.
  */
 export const MOODS: Record<Mood, { label: string; key: string; fill: string; keyIntensity: number; env: number; hemi: number; amb: number; sun: [number, number, number]; bg: string; exposure: number; night?: boolean }> = {
-  gallery: { label: "Gallery", key: "#ffffff", fill: "#f6f6f4", keyIntensity: 2.6, env: 1.05, hemi: 0.18, amb: 1.5, sun: [2.2, 4.6, 4.2], bg: "#0e0e0d", exposure: 1.05 },
+  gallery: { label: "Gallery", key: "#ffffff", fill: "#f6f6f4", keyIntensity: 2.6, env: 1.05, hemi: 0.18, amb: 1.85, sun: [2.2, 4.6, 4.2], bg: "#0e0e0d", exposure: 1.05 },
   // daylight: a stronger, lower sun with less fill so cast shadows read clearly
   // white light and a neutral exposure, so finishes read at their true colour
-  morning: { label: "Daylight", key: "#fffaf3", fill: "#f7f8fa", keyIntensity: 2.6, env: 1.0, hemi: 0.3, amb: 1.5, sun: [6.2, 3.6, 1.1], bg: "#121417", exposure: 1 },
-  golden: { label: "Golden hour", key: "#ffc180", fill: "#ffe4c6", keyIntensity: 3.0, env: 0.8, hemi: 0.24, amb: 1.0, sun: [6.4, 2.1, 0.9], bg: "#15100b", exposure: 1 },
+  morning: { label: "Daylight", key: "#fffaf3", fill: "#f7f8fa", keyIntensity: 2.6, env: 1.0, hemi: 0.3, amb: 1.85, sun: [6.2, 3.6, 1.1], bg: "#121417", exposure: 1 },
+  golden: { label: "Golden hour", key: "#ffc180", fill: "#ffe4c6", keyIntensity: 3.0, env: 0.8, hemi: 0.24, amb: 1.2, sun: [6.4, 2.1, 0.9], bg: "#15100b", exposure: 1 },
   evening: { label: "Evening 2700K", key: "#ffbd7a", fill: "#ffdab0", keyIntensity: 1.2, env: 0.4, hemi: 0.12, amb: 0.3, sun: [0.5, 2.6, 2.5], bg: "#0b0907", exposure: 1 },
   // night: faint blue moonlight through the window; the room's own lights do the work
   night: { label: "Night", key: "#8ea6d0", fill: "#5d6b85", keyIntensity: 0.28, env: 0.07, hemi: 0.04, amb: 0.02, sun: [5, 3.2, 1.6], bg: "#05070a", exposure: 1.05, night: true },
@@ -31,7 +31,9 @@ export function Lighting({ mood, shadows, shadowMapSize = 2048, span = 6 }: { mo
   const m = MOODS[mood];
   const wide = span > 10;
   const reach = wide ? 2.4 : 1;
-  const sunPos: [number, number, number] = [m.sun[0] * reach, m.sun[1] * reach, m.sun[2] * reach];
+  // in the whole home the sun comes from the kitchen and bedroom side, so those rooms get the
+  // sun patches and the entrance and lounge are lit softly instead of being glared out
+  const sunPos: [number, number, number] = [m.sun[0] * reach * (wide ? -1 : 1), m.sun[1] * reach, m.sun[2] * reach];
   const half = wide ? span / 2 + 1.5 : 5;
   const sun = useRef<THREE.DirectionalLight>(null);
   const hemi = useRef<THREE.HemisphereLight>(null);
