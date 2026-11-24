@@ -176,6 +176,12 @@ export function Concierge() {
     }
     list.current?.scrollTo({ top: list.current.scrollHeight, behavior: "smooth" });
   }, [msgs, busy]);
+  // other pages can open the concierge (e.g. the contact page's "Ask Unipanel" card)
+  useEffect(() => {
+    const openIt = () => setOpen(true);
+    window.addEventListener("unipanel:concierge", openIt);
+    return () => window.removeEventListener("unipanel:concierge", openIt);
+  }, []);
   useEffect(() => {
     if (open) setTimeout(() => inputRef.current?.focus(), 250);
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);

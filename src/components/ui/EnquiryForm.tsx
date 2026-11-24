@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { SHOWROOMS, showroomById, type CityId } from "@/lib/site";
 import { asset, IS_STATIC } from "@/lib/asset";
 
@@ -14,6 +14,9 @@ interface Props {
   fields: FieldDef[];
   submitLabel: string;
   defaultCity?: CityId;
+  /** Controlled showroom (the contact page's showroom cards); changes follow the prop. */
+  city?: CityId;
+  onCityChange?: (c: CityId) => void;
   defaults?: Record<string, string>;
   extra?: Record<string, string>;
   dark?: boolean;
@@ -29,11 +32,18 @@ const PHONE = /^[+()\d\s-]{9,20}$/;
  * email. With FORM_WEBHOOK_URL configured the server delivers it; otherwise (and in the
  * static build) the visitor's email app opens, pre-addressed to that showroom.
  */
-export function EnquiryForm({ kind, fields, submitLabel, defaultCity = "jhb", defaults = {}, extra = {}, dark, successTitle = "Thank you.", onSuccess }: Props) {
+export function EnquiryForm({ kind, fields, submitLabel, defaultCity = "jhb", city: cityProp, onCityChange, defaults = {}, extra = {}, dark, successTitle = "Thank you.", onSuccess }: Props) {
   const started = useRef(Date.now());
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [state, setState] = useState<"idle" | "sending" | "sent" | "mailto">("idle");
-  const [city, setCity] = useState<CityId>(defaultCity);
+  const [city, setCityState] = useState<CityId>(cityProp ?? defaultCity);
+  useEffect(() => {
+    if (cityProp) setCityState(cityProp);
+  }, [cityProp]);
+  const setCity = (c: CityId) => {
+    setCityState(c);
+    onCityChange?.(c);
+  };
 
   const submit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();

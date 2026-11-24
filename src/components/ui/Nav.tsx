@@ -73,13 +73,22 @@ export function Nav() {
           <Logo dark={onDark} />
         </Link>
         <nav aria-label="Primary" className="hidden items-center gap-7 text-[14px] xl:flex">
-          {NAV.slice(0, 6).map((n) => (
+          {[...NAV.slice(0, 6), ...NAV.filter((n) => n.href.startsWith("/contact"))].map((n) => (
             <Link key={n.href} href={n.href} className={`link-u ${path?.startsWith(n.href) ? "opacity-100" : "opacity-75 hover:opacity-100"}`}>
               {n.label}
             </Link>
           ))}
         </nav>
         <div className="relative z-10 flex items-center gap-2">
+          {/* Contact: in the link row on wide screens, its own link below that, an icon on phones */}
+          <Link href="/contact/" className={`link-u hidden px-2 text-[14px] sm:inline-block xl:hidden ${path?.startsWith("/contact") ? "opacity-100" : "opacity-80 hover:opacity-100"}`}>
+            Contact
+          </Link>
+          <Link href="/contact/" aria-label="Contact us" className="grid h-10 w-10 place-items-center sm:hidden">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>
+              <path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2Z" />
+            </svg>
+          </Link>
           {!studio && (
             <Link href="/studio/" className={`btn hidden !min-h-10 !px-4 !text-[14px] md:inline-flex ${onDark ? "btn-light" : "btn-ink"}`}>
               Studio
