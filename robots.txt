@@ -1,0 +1,5 @@
+User-Agent: *
+Allow: /
+Disallow: /api/
+
+Sitemap: https://onlinepixelcode-collab.github.io/unipanel/sitemap.xml
