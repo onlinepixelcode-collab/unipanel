@@ -1,7 +1,9 @@
 "use client";
 import * as THREE from "three";
 import { Suspense, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
-import { Canvas, useThree } from "@react-three/fiber";
+import { Canvas, useLoader, useThree } from "@react-three/fiber";
+import { HDRLoader } from "three/examples/jsm/loaders/HDRLoader.js";
+import { asset } from "@/lib/asset";
 import { CameraControls, ContactShadows, PerformanceMonitor, SoftShadows } from "@react-three/drei";
 import { EffectComposer, N8AO, Bloom, ToneMapping, SMAA, Vignette, Noise } from "@react-three/postprocessing";
 import { BlendFunction, ToneMappingMode } from "postprocessing";
@@ -11,12 +13,15 @@ import { RoomMeshes, RoomShell } from "./RoomMeshes";
 import { RoomProps } from "./RoomProps";
 import { RoomLights, WindowLights } from "./RoomLights";
 import { HomeWalker } from "./HomeWalker";
+import { PhotoRender } from "./PhotoRender";
 import { Lighting, MOODS } from "./Lighting";
 import { configureMaterials, disposeMaterials } from "./materials";
 import type { Tier } from "./quality";
 
 export interface StudioHandle {
   capture: (scale?: number) => Promise<string>;
+  /** the canvas exactly as it is now (used to save a finished photo) */
+  snapshot: () => string;
   exportGroup: () => THREE.Object3D | null;
 }
 
@@ -45,6 +50,9 @@ interface Props {
   onToggle?: (id: string) => void;
   /** Walking the home: the room the visitor is in (-1 = hallway). */
   onRoomChange?: (i: number) => void;
+  /** Photo mode: path-traced stills; progress 0..1 is reported back. */
+  photo?: boolean;
+  onPhotoProgress?: (p: number, label: string) => void;
 }
 
 const MM = 0.001;
@@ -170,6 +178,7 @@ function Bridge({ handle, group }: { handle?: Ref<StudioHandle>; group: React.Re
       return url;
     },
     exportGroup: () => group.current,
+    snapshot: () => gl.domElement.toDataURL("image/png"),
   }));
   return null;
 }
@@ -240,6 +249,29 @@ function RoomReflections({ room, homeRoom = 0, deps, size }: { room: RoomSpec; h
   return null;
 }
 
+/**
+ * The garden outside: a real South African garden panorama (Poly Haven, CC0) around the
+ * house, seen through the windows. Its brightness and tint follow the time of day.
+ */
+const SKY_TINT: Record<string, [string, number]> = { gallery: ["#ffffff", 0.9], morning: ["#ffffff", 1], golden: ["#ffc68f", 0.75], evening: ["#a07a62", 0.18], night: ["#4a5a7a", 0.035] };
+function Skydome({ center, mood }: { center: [number, number]; mood: string }) {
+  const tex = useLoader(HDRLoader, asset("/hdri/pretoria_gardens_2k.hdr"));
+  const mat = useMemo(() => {
+    tex.mapping = THREE.EquirectangularReflectionMapping;
+    tex.colorSpace = THREE.LinearSRGBColorSpace;
+    return new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide, fog: false, depthWrite: false });
+  }, [tex]);
+  const [c, k] = SKY_TINT[mood] ?? SKY_TINT.morning;
+  useEffect(() => {
+    mat.color.set(c).multiplyScalar(k);
+  }, [mat, c, k]);
+  return (
+    <mesh position={[center[0], 1.6, center[1]]} material={mat} renderOrder={-1} userData={{ noRoomEnv: true, noPath: true }}>
+      <sphereGeometry args={[90, 64, 32]} />
+    </mesh>
+  );
+}
+
 /** The view camera also sees layer 2 (the reflective floor), which the reflection probe skips. */
 function ViewLayers() {
   const camera = useThree((s) => s.camera);
@@ -286,10 +318,12 @@ export default function StudioCanvas(p: Props) {
       <Materials />
       <Kick deps={[room, p.scheme, p.mood, p.tier, lightsOn]} />
       <RoomLights room={room} on={lightsOn} tier={p.tier} homeRoom={p.homeRoom} />
-      <WindowLights room={room} mood={p.mood} />
+      {!p.photo && <WindowLights room={room} mood={p.mood} />}
       {shadows && <RoomReflections room={room} homeRoom={p.homeRoom} size={p.tier === 2 ? 512 : 192} deps={[p.scheme, p.mood, lightsOn, openKey]} />}
       <PerformanceMonitor onDecline={() => setDprCap((d) => Math.max(1, d - 0.25))} />
       <Lighting mood={p.mood} shadows={shadows} shadowMapSize={p.tier === 2 ? (room.rooms ? 4096 : 2048) : room.rooms ? 2048 : 1024} span={room.bounds.width * MM} />
+      {/* the garden streams in on its own, without holding up the house */}
+      <Suspense fallback={null}>{room.rooms && p.camera === "walk" && <Skydome center={[0, (room.bounds.depth * MM) / 2]} mood={p.mood} />}</Suspense>
       <Suspense fallback={null}>
         <group ref={group}>
           <RoomShell
@@ -329,7 +363,12 @@ export default function StudioCanvas(p: Props) {
         <Rig room={room} preset={p.camera} nonce={p.cameraNonce} compact={!!p.compact} lock={p.lockControls} autoRotate={p.autoRotate} homeRoom={p.homeRoom} />
       )}
       <Bridge handle={p.handle} group={group} />
-      {p.tier === 2 ? (
+      {p.photo && (
+        <Suspense fallback={null}>
+          <PhotoRender envScale={({ gallery: 0.9, morning: 1, golden: 0.7, evening: 0.15, night: 0.03 } as Record<string, number>)[p.mood] ?? 1} onProgress={p.onPhotoProgress} />
+        </Suspense>
+      )}
+      {p.tier === 2 && !p.photo ? (
         <EffectComposer multisampling={0} enableNormalPass={false}>
           {/* contact shadows in corners and under furniture */}
           <N8AO aoRadius={0.5} distanceFalloff={0.8} intensity={2.6} quality="medium" halfRes />

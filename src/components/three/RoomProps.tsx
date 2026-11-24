@@ -1,6 +1,8 @@
 "use client";
 import * as THREE from "three";
-import { memo, useMemo } from "react";
+import { memo, Suspense, useEffect, useMemo } from "react";
+import { useGLTF } from "@react-three/drei";
+import { asset } from "@/lib/asset";
 import type { Prop } from "@/lib/studio/layout";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { getStagingMaterial } from "./materials";
@@ -32,8 +34,100 @@ const M = {
   rice: () => getStagingMaterial("p-rice", "#f4f0e6", { roughness: 0.95 }),
   fabric: (c: string) => getStagingMaterial("p-fabric", c, { roughness: 0.96, sheen: 0.6, sheenRoughness: 0.8, sheenColor: new THREE.Color("#ffffff") }),
   travertine: () => getStagingMaterial("p-travertine", "#d8cbb5", { roughness: 0.55, clearcoat: 0.25 }),
+  globe: () => getStagingMaterial("p-globe", "#f4f1ea", { roughness: 0.05, transparent: true, opacity: 0.32, clearcoat: 1, depthWrite: false, emissive: new THREE.Color("#ffe2b8"), emissiveIntensity: 0.25 }),
+  bulb: () => getStagingMaterial("p-bulb", "#fff3dc", { emissive: new THREE.Color("#ffd8a0"), emissiveIntensity: 6, roughness: 1 }),
   shade: () => getStagingMaterial("p-shade", "#f3ece0", { roughness: 0.9, side: THREE.DoubleSide, emissive: new THREE.Color("#ffd9a8"), emissiveIntensity: 0.35 }),
 };
+
+/**
+ * Real scanned fabric (Poly Haven, CC0), mapped by world position (triplanar) so it keeps
+ * its true weave scale on any piece without stretching; tinted to the piece's colour.
+ */
+const fabricTex = new Map<string, { map: THREE.Texture; rough: THREE.Texture }>();
+function fabricTextures(name: string) {
+  let t = fabricTex.get(name);
+  if (!t) {
+    const load = (suffix: string, srgb: boolean) => {
+      const tx = new THREE.TextureLoader().load(asset(`/textures/fabric/${name}_${suffix}.jpg`));
+      tx.wrapS = tx.wrapT = THREE.RepeatWrapping;
+      tx.anisotropy = 8;
+      if (srgb) tx.colorSpace = THREE.SRGBColorSpace;
+      return tx;
+    };
+    t = { map: load("diff", true), rough: load("rough", false) };
+    fabricTex.set(name, t);
+  }
+  return t;
+}
+/** average brightness of each scan, so every fabric keeps the tint's true colour */
+const FAB_MEAN: Record<string, number> = { curly_teddy_natural: 0.86, rough_linen: 0.58, velour_velvet: 0.33, poly_wool_herringbone: 0.45, hessian_380: 0.55 };
+const scanned = new Map<string, THREE.MeshPhysicalMaterial>();
+function scannedFabric(name: string, tint: string, scale = 2.2) {
+  const key = `${name}|${tint}`;
+  let m = scanned.get(key);
+  if (m) return m;
+  const { map, rough } = fabricTextures(name);
+  m = new THREE.MeshPhysicalMaterial({ color: tint, roughness: 1, sheen: 0.7, sheenRoughness: 0.75, sheenColor: new THREE.Color("#ffffff") });
+  m.userData.noRoomEnv = true;
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.fabMap = { value: map };
+    sh.uniforms.fabRough = { value: rough };
+    sh.uniforms.fabScale = { value: scale };
+    sh.uniforms.fabMean = { value: FAB_MEAN[name] ?? 0.6 };
+    sh.vertexShader = sh.vertexShader
+      .replace("#include <common>", "#include <common>\nvarying vec3 vFabP; varying vec3 vFabN;")
+      .replace("#include <project_vertex>", "#include <project_vertex>\nvFabP = (modelMatrix * vec4(transformed, 1.0)).xyz; vFabN = normalize(mat3(modelMatrix) * objectNormal);");
+    sh.fragmentShader = sh.fragmentShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+uniform sampler2D fabMap; uniform sampler2D fabRough; uniform float fabScale; uniform float fabMean;
+varying vec3 vFabP; varying vec3 vFabN;
+vec4 fabTri(sampler2D t){ vec3 w = pow(abs(vFabN), vec3(4.0)); w /= (w.x + w.y + w.z);
+  return texture2D(t, vFabP.zy * fabScale) * w.x + texture2D(t, vFabP.xz * fabScale) * w.y + texture2D(t, vFabP.xy * fabScale) * w.z; }`,
+      )
+      // use only the weave's light and shade (not the scan's own colour), normalised, so the tint sets the colour
+      .replace("#include <color_fragment>", "#include <color_fragment>\nfloat fabL = dot(fabTri(fabMap).rgb, vec3(0.299, 0.587, 0.114)) / fabMean;\ndiffuseColor.rgb *= mix(1.0, fabL, 0.85);")
+      .replace("#include <roughnessmap_fragment>", "#include <roughnessmap_fragment>\nroughnessFactor = clamp(0.55 + fabTri(fabRough).g * 0.5, 0.0, 1.0);");
+  };
+  m.customProgramCacheKey = () => `fabric-${name}`;
+  scanned.set(key, m);
+  return m;
+}
+
+/** A real model (Poly Haven glTF), scaled to a target height and stood on the floor. */
+function RealModel({ id, height, rotY = 0 }: { id: string; height: number; rotY?: number }) {
+  const { scene } = useGLTF(asset(`/models/${id}/${id}_1k.gltf`));
+  const obj = useMemo(() => {
+    const c = scene.clone(true);
+    const box = new THREE.Box3().setFromObject(c);
+    const size = box.getSize(new THREE.Vector3());
+    const k = height / Math.max(0.001, size.y);
+    c.scale.setScalar(k);
+    const center = box.getCenter(new THREE.Vector3());
+    c.position.set(-center.x * k, -box.min.y * k, -center.z * k);
+    c.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (mesh.isMesh) {
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+      }
+    });
+    return c;
+  }, [scene, height]);
+  return (
+    <group rotation={[0, rotY, 0]}>
+      <primitive object={obj} />
+    </group>
+  );
+}
+function Real({ id, height, rotY, children }: { id: string; height: number; rotY?: number; children: React.ReactNode }) {
+  return (
+    <Suspense fallback={children}>
+      <RealModel id={id} height={height} rotY={rotY} />
+    </Suspense>
+  );
+}
 
 /** Abstract paintings for the hall: soft colour fields, drawn once. */
 const artCache = new Map<number, THREE.CanvasTexture>();
@@ -159,6 +253,23 @@ function Foliage({ count, spread, height, seed, olive }: { count: number; spread
   );
 }
 
+/** A sculptural curved armchair in bouclé (2026): a low rounded seat cradled by a continuous curved back and arms. */
+function CurvedArmchair() {
+  const boucle = scannedFabric("curly_teddy_natural", "#efe8dc", 2.6);
+  const back = useMemo(() => new THREE.TorusGeometry(0.33, 0.13, 24, 64, Math.PI * 1.25), []);
+  const seat = useMemo(() => new RoundedBoxGeometry(0.62, 0.2, 0.56, 6, 0.09), []);
+  const base = useMemo(() => new RoundedBoxGeometry(0.78, 0.26, 0.72, 6, 0.12), []);
+  return (
+    <>
+      <mesh geometry={base} material={boucle} position={[0, 0.13, 0]} castShadow receiveShadow />
+      <mesh geometry={seat} material={boucle} position={[0, 0.34, 0.05]} castShadow receiveShadow />
+      {/* continuous back and arms, wrapping from one side round the back to the other */}
+      <mesh geometry={back} material={boucle} position={[0, 0.46, -0.02]} rotation={[Math.PI / 2, 0, Math.PI * 0.875]} castShadow receiveShadow />
+      <Cyl r={0.33} h={0.02} p={[0, 0.01, 0]} m={M.walnut()} />
+    </>
+  );
+}
+
 function Item({ p }: { p: Prop }) {
   const seed = Math.round(Math.abs(p.pos[0] * 7 + p.pos[2] * 13));
   switch (p.kind) {
@@ -183,26 +294,27 @@ function Item({ p }: { p: Prop }) {
     case "vase":
       return (
         <>
-          <mesh geometry={G.vase} material={M.ceramic()} castShadow receiveShadow />
-          <Foliage count={9} spread={0.13} height={0.62} seed={seed} olive />
+          <Real id={seed % 2 ? "ceramic_vase_01" : "ceramic_vase_03"} height={seed % 2 ? 0.34 : 0.4}>
+            <mesh geometry={G.vase} material={M.ceramic()} castShadow receiveShadow />
+          </Real>
+          <group position={[0, 0.12, 0]}>
+            <Foliage count={9} spread={0.13} height={0.55} seed={seed} olive />
+          </group>
         </>
       );
     case "plant": {
       const floor = p.pos[1] < 100;
       return floor ? (
-        <>
+        <Real id={seed % 2 ? "pachira_aquatica_01" : "potted_plant_02"} height={seed % 2 ? 1.7 : 0.95} rotY={seed}>
           <mesh geometry={G.bigPot} material={M.stone()} castShadow receiveShadow />
           <group position={[0, 0.4, 0]}>
             <Foliage count={26} spread={0.42} height={1.05} seed={seed} />
           </group>
-        </>
+        </Real>
       ) : (
-        <>
+        <Real id="potted_plant_04" height={0.26} rotY={seed}>
           <mesh geometry={G.pot} material={M.ceramic()} castShadow receiveShadow scale={0.75} />
-          <group position={[0, 0.1, 0]}>
-            <Foliage count={11} spread={0.12} height={0.2} seed={seed} />
-          </group>
-        </>
+        </Real>
       );
     }
     case "jars":
@@ -369,7 +481,7 @@ function Item({ p }: { p: Prop }) {
     }
     case "sofa": {
       const w = (p.span ?? 2400) * MM;
-      const fab = M.fabric("#cdc6ba");
+      const fab = scannedFabric("curly_teddy_natural", "#efe9df", 2.4);
       const seat = w - 0.36;
       const n = Math.max(2, Math.round(seat / 0.8));
       return (
@@ -383,34 +495,21 @@ function Item({ p }: { p: Prop }) {
             <Soft key={sd} s={[0.18, 0.62, 0.95]} p={[sd * (w / 2 - 0.09), 0.36, 0]} m={fab} />
           ))}
           {[-0.45, 0.42].map((x, i) => (
-            <Soft key={`c${i}`} s={[0.42, 0.4, 0.13]} p={[x * (w / 2 - 0.4), 0.66, -0.2]} r={[-0.25, i ? -0.2 : 0.25, 0]} m={M.fabric(i ? "#8a6f55" : "#e8e2d6")} />
+            <Soft key={`c${i}`} s={[0.42, 0.4, 0.13]} p={[x * (w / 2 - 0.4), 0.66, -0.2]} r={[-0.25, i ? -0.2 : 0.25, 0]} m={i ? scannedFabric("velour_velvet", "#a08463", 3) : scannedFabric("curly_teddy_natural", "#f3eee6", 3)} round={0.06} />
           ))}
           {[-1, 1].flatMap((sx) => [-1, 1].map((sz) => <Cyl key={`${sx}${sz}`} r={0.02} h={0.06} p={[sx * (w / 2 - 0.08), 0.03, sz * 0.4]} m={M.black()} />))}
         </>
       );
     }
-    case "armchair": {
-      const fab = M.fabric("#a89580");
-      return (
-        <>
-          <Soft s={[0.82, 0.3, 0.82]} p={[0, 0.25, 0]} m={fab} />
-          <Soft s={[0.6, 0.12, 0.62]} p={[0, 0.46, 0.06]} m={fab} />
-          <Soft s={[0.82, 0.48, 0.18]} p={[0, 0.6, -0.32]} r={[-0.12, 0, 0]} m={fab} />
-          {[-1, 1].map((sd) => (
-            <Soft key={sd} s={[0.13, 0.56, 0.82]} p={[sd * 0.345, 0.38, 0]} m={fab} />
-          ))}
-          {[-1, 1].flatMap((sx) => [-1, 1].map((sz) => <Cyl key={`${sx}${sz}`} r={0.018} h={0.1} p={[sx * 0.34, 0.05, sz * 0.34]} m={M.walnut()} />))}
-        </>
-      );
-    }
+    case "armchair":
+      return <CurvedArmchair />;
     case "rug":
     case "runner": {
       const w = (p.span ?? 2400) * MM;
       const d = p.kind === "runner" ? 0.9 : w * 0.68;
       return (
         <>
-          <mesh geometry={G.box} material={M.fabric(p.kind === "runner" ? "#b8ab98" : "#d6cdbd")} scale={[w, 0.012, d]} position={[0, 0.006, 0]} receiveShadow />
-          <mesh geometry={G.box} material={M.fabric(p.kind === "runner" ? "#a3957f" : "#c7bca9")} scale={[w - 0.16, 0.013, d - 0.16]} position={[0, 0.0065, 0]} receiveShadow />
+          <mesh geometry={G.box} material={p.kind === "runner" ? scannedFabric("hessian_380", "#d9cdb8", 2) : scannedFabric("poly_wool_herringbone", "#e6ddcd", 1.6)} scale={[w, 0.014, d]} position={[0, 0.007, 0]} receiveShadow />
         </>
       );
     }
@@ -442,13 +541,13 @@ function Item({ p }: { p: Prop }) {
         </>
       );
     case "bed": {
-      const cover = M.fabric("#ece8e0");
+      const cover = scannedFabric("rough_linen", "#f3efe8", 2.2);
       return (
         <>
-          <Soft s={[1.92, 0.32, 2.16]} p={[0, 0.16, 0]} m={M.fabric("#b9b1a4")} />
+          <Soft s={[1.92, 0.32, 2.16]} p={[0, 0.16, 0]} m={scannedFabric("curly_teddy_natural", "#cfc6b8", 2.4)} />
           <Soft s={[1.82, 0.22, 2.02]} p={[0, 0.43, 0]} m={M.fabric("#f6f4ef")} />
           <Soft s={[1.9, 0.09, 1.5]} p={[0, 0.56, 0.3]} m={cover} />
-          <Soft s={[1.94, 0.06, 0.5]} p={[0, 0.62, 0.72]} m={M.fabric("#7b6852")} />
+          <Soft s={[1.94, 0.06, 0.5]} p={[0, 0.62, 0.72]} m={scannedFabric("velour_velvet", "#8a735a", 2.6)} round={0.025} />
           {[-0.45, 0.45].map((x) => (
             <Soft key={x} s={[0.7, 0.16, 0.42]} p={[x, 0.62, -0.72]} r={[-0.35, 0, 0]} m={M.fabric("#f4f2ee")} />
           ))}
@@ -461,7 +560,7 @@ function Item({ p }: { p: Prop }) {
     case "bench":
       return (
         <>
-          <Soft s={[1.3, 0.1, 0.42]} p={[0, 0.45, 0]} m={M.fabric("#a89580")} round={0.035} />
+          <Soft s={[1.3, 0.1, 0.42]} p={[0, 0.45, 0]} m={scannedFabric("curly_teddy_natural", "#ece5d8", 2.6)} round={0.04} />
           {[-1, 1].flatMap((sx) => [-1, 1].map((sz) => <Box key={`${sx}${sz}`} s={[0.04, 0.4, 0.04]} p={[sx * 0.6, 0.2, sz * 0.17]} m={M.walnut()} />))}
         </>
       );
@@ -491,6 +590,34 @@ function Item({ p }: { p: Prop }) {
           </mesh>
         </>
       );
+    case "pendant":
+      // hangs from the ceiling: a real globe pendant (Poly Haven), its globe at about 1.75m
+      return (
+        <group position={[0, -1.25, 0]}>
+          <Real id="modern_ceiling_lamp_01" height={1.25}>
+            <mesh geometry={G.sphere} material={M.shade()} scale={0.2} position={[0, 0.2, 0]} />
+          </Real>
+        </group>
+      );
+    case "globeCluster": {
+      const r = rng(seed + 3);
+      const globes = Array.from({ length: 9 }, () => {
+        const a = r() * Math.PI * 2, d = 0.1 + r() * 0.42;
+        return { x: Math.cos(a) * d, z: Math.sin(a) * d, drop: 0.55 + r() * 0.75, rad: 0.1 + r() * 0.06 };
+      });
+      return (
+        <>
+          {globes.map((g, i) => (
+            <group key={i} position={[g.x, 0, g.z]}>
+              <mesh geometry={G.stem} material={M.black()} scale={[0.6, g.drop, 0.6]} position={[0, -g.drop / 2, 0]} />
+              <mesh geometry={G.sphere} material={M.globe()} scale={g.rad} position={[0, -g.drop - g.rad, 0]} />
+              <mesh geometry={G.sphere} material={M.bulb()} scale={0.025} position={[0, -g.drop - g.rad, 0]} />
+            </group>
+          ))}
+          <Cyl r={0.32} h={0.02} p={[0, -0.01, 0]} m={M.black()} />
+        </>
+      );
+    }
     case "stool":
       return (
         <>

@@ -82,6 +82,25 @@ export default function StudioApp() {
   const [override, setOverride] = useState<import("@/lib/studio/scheme").Scheme | null>(null);
   const [otherImg, setOtherImg] = useState<string | null>(null);
   const [roomToast, setRoomToast] = useState<{ name: string; n: number } | null>(null);
+  // photo mode: path-traced stills
+  const [photo, setPhoto] = useState(false);
+  const [photoProg, setPhotoProg] = useState<{ p: number; label: string }>({ p: 0, label: "" });
+  const lastProg = useRef(0);
+  const onPhotoProgress = useCallback((p: number, label: string) => {
+    // update the overlay a few times a second, not every sample
+    const now = performance.now();
+    if (p < 1 && now - lastProg.current < 200) return;
+    lastProg.current = now;
+    setPhotoProg({ p, label });
+  }, []);
+  const savePhoto = () => {
+    const url = canvas.current?.snapshot();
+    if (!url) return;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `UnipanelSA-photo-${Date.now().toString(36)}.png`;
+    a.click();
+  };
 
   // the walkable home's plan (for the minimap and for walking to a room)
   const homeSpec = useMemo(
@@ -698,6 +717,17 @@ export default function StudioApp() {
       <IconBtn on={st.comparing} onClick={toggleCompare} label={st.comparing ? "Exit compare" : "Compare design A and B"} text="Compare">
         {icon.split}
       </IconBtn>
+      <IconBtn
+        on={photo}
+        onClick={() => {
+          setPhotoProg({ p: 0, label: "Preparing…" });
+          setPhoto(!photo);
+        }}
+        label={photo ? "Leave photo mode" : "Render a photoreal photo of this view"}
+        text="Render photo"
+      >
+        {icon.camera}
+      </IconBtn>
     </div>
   );
 
@@ -983,6 +1013,8 @@ export default function StudioApp() {
           homeRoom={st.homeRoom}
           onRoom={goRoom}
           onRoomChange={onRoomChange}
+          photo={photo}
+          onPhotoProgress={onPhotoProgress}
           tier={tier}
           selected={selected}
           hovered={st.hovered}
@@ -1037,6 +1069,27 @@ export default function StudioApp() {
         </div>
       )}
 
+      {photo && (
+        <div className="absolute inset-x-0 top-20 z-20 flex justify-center px-4">
+          <div className="glass flex w-[min(460px,100%)] items-center gap-4 rounded-2xl px-4 py-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-[13px] text-porcelain">
+                {photoProg.label || "Rendering photo"} {photoProg.p > 0.05 && photoProg.p < 1 ? `· ${Math.round(photoProg.p * 100)}%` : ""}
+              </p>
+              <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/15">
+                <div className="h-full bg-champagne transition-[width] duration-300" style={{ width: `${Math.max(3, photoProg.p * 100)}%` }} />
+              </div>
+              <p className="mt-1.5 text-[12px] text-stone-light">Hold still: real light is traced sample by sample. Moving starts it again.</p>
+            </div>
+            <button onClick={savePhoto} disabled={photoProg.p < 0.15} className="h-10 rounded-full bg-champagne px-4 text-[13px] font-medium text-ink disabled:opacity-40">
+              Save photo
+            </button>
+            <button onClick={() => setPhoto(false)} className="h-10 rounded-full px-3 text-[13px] text-porcelain/85 ring-1 ring-white/20">
+              Done
+            </button>
+          </div>
+        </div>
+      )}
       {hoverPt && st.hovered && !mobile && (
         <div className="pointer-events-none fixed z-30 -translate-x-1/2 -translate-y-[140%] rounded-full bg-ink/85 px-3 py-1.5 text-[13px] text-porcelain backdrop-blur" style={{ left: hoverPt.x, top: hoverPt.y }}>
           {ZONE_LABEL[st.hovered]} · {finishById(st.scheme.zones[st.hovered])?.name}

@@ -33,7 +33,8 @@ export interface Panel {
 
 export type PropKind =
   | "jars" | "plant" | "kettle" | "pot" | "boards" | "bowl" | "vase" | "books" | "plates" | "glasses" | "stool" | "folded" | "garments" | "soap" | "bottles" | "towel" | "speaker"
-  | "sofa" | "armchair" | "rug" | "coffeeTable" | "floorLamp" | "bed" | "lamp" | "bench" | "console" | "art" | "runner" | "diningTable";
+  | "sofa" | "armchair" | "rug" | "coffeeTable" | "floorLamp" | "bed" | "lamp" | "bench" | "console" | "art" | "runner" | "diningTable"
+  | "pendant" | "globeCluster";
 
 /** Styling items (visual staging only): kitchenware, books, plants. Position is the item's base centre, in mm. */
 export interface Prop {
@@ -109,7 +110,7 @@ const WALL_BOTTOM = 1450;
 const WALL_H = 950; // wall units run up to 2400mm
 const WALL_DEPTH = 330;
 const TALL_TOP = 2400; // tall units to 2400mm, bulkhead above to the ceiling
-const CEILING = 2700;
+const CEILING = 3000; // generous 3m ceilings
 
 type Fixture = "sink" | "hob";
 interface UnitSpec {
@@ -502,7 +503,7 @@ function kitchen(b: Builder): RoomSpec {
   return {
     panels: b.panels,
     props: b.props,
-    bounds: { width, depth, height: 2700 },
+    bounds: { width, depth, height: CEILING },
     focus: [0, 1100, 900],
     islandFocus,
     detailFocus: [backX + 600 * 2 + 300, 700, 600],
@@ -567,8 +568,8 @@ function wardrobe(b: Builder): RoomSpec {
   // feature cladding on the back wall either side of the run
   const bay = (width - backLen) / 2 - DOOR - 2;
   const wall = new Run(b, [-width / 2, 0], 0);
-  wall.add(0, 0, 0, bay, 2700, DOOR, { zone: "cladding", order: 0.2 });
-  wall.add(width - bay, 0, 0, bay, 2700, DOOR, { zone: "cladding", order: 0.2, uvX: 0 });
+  wall.add(0, 0, 0, bay, CEILING, DOOR, { zone: "cladding", order: 0.2 });
+  wall.add(width - bay, 0, 0, bay, CEILING, DOOR, { zone: "cladding", order: 0.2, uvX: 0 });
   const side: UnitSpec[] = [
     { type: "wardrobe", w: 600 },
     { type: "wardrobe-open-shelf", w: 600 },
@@ -597,7 +598,7 @@ function wardrobe(b: Builder): RoomSpec {
   return {
     panels: b.panels,
     props: b.props,
-    bounds: { width, depth: 4800, height: 2700 },
+    bounds: { width, depth: 4800, height: CEILING },
     focus: [0, 1200, 1200],
     detailFocus: [-backLen / 2 + 900, 1300, 600],
     walls: { left: true, right: true },
@@ -609,7 +610,7 @@ function wardrobe(b: Builder): RoomSpec {
 function media(b: Builder): RoomSpec {
   const W = 4200;
   const wallRun = new Run(b, [-W / 2, 0], 0);
-  wallRun.add(0, 0, 0, W, 2700, DOOR, { zone: "cladding", order: 0.2 });
+  wallRun.add(0, 0, 0, W, CEILING, DOOR, { zone: "cladding", order: 0.2 });
   // tall units at each end
   for (const x of [0, W - 600]) {
     wallRun.add(x, 0, DOOR, 600, 2400, 400, { zone: null, staging: "carcass", order: 0.3, hollow: 4 });
@@ -647,7 +648,7 @@ function media(b: Builder): RoomSpec {
   wallRun.add((W - 1450) / 2, 1080, DOOR, 1450, 820, 40, { zone: null, staging: "tv", order: 0.95 });
   return {
     panels: b.panels,
-    bounds: { width: W + 800, depth: 4600, height: 2700 },
+    bounds: { width: W + 800, depth: 4600, height: CEILING },
     focus: [0, 1200, 400],
     detailFocus: [0, 700, 450],
     props: b.props,
@@ -660,7 +661,7 @@ function media(b: Builder): RoomSpec {
 function vanity(b: Builder): RoomSpec {
   const W = 3000;
   const run = new Run(b, [-W / 2, 0], 0);
-  run.add(0, 0, 0, W, 2700, DOOR, { zone: "cladding", order: 0.2 });
+  run.add(0, 0, 0, W, CEILING, DOOR, { zone: "cladding", order: 0.2 });
   const vx = 600;
   const vw = 1400;
   run.add(vx, 420, DOOR, vw, 450, 470, { zone: null, staging: "carcass", order: 0.3, hollow: 0 });
@@ -687,7 +688,7 @@ function vanity(b: Builder): RoomSpec {
   run.prop("bottles", vx + vw + 460, 1800 + b.scheme.buildup, DOOR + 120);
   return {
     panels: b.panels,
-    bounds: { width: W + 600, depth: 3600, height: 2700 },
+    bounds: { width: W + 600, depth: 3600, height: CEILING },
     focus: [-W / 2 + vx + vw / 2, 1100, 400],
     props: b.props,
     detailFocus: [-W / 2 + vx + vw / 2, 640, 500],
@@ -702,7 +703,7 @@ function bedroom(b: Builder): RoomSpec {
   const W = 4200;
   const run = new Run(b, [-W / 2, 0], 0);
   // headboard wall: full-height cladding behind the bed
-  run.add(0, 0, 0, W, 2700, DOOR, { zone: "cladding", order: 0.2 });
+  run.add(0, 0, 0, W, CEILING, DOOR, { zone: "cladding", order: 0.2 });
   // picture ledge across the headboard wall
   run.add(W / 2 - 1000, 1250, DOOR, 2000, b.scheme.buildup, 140, { zone: "shelving", order: 0.8 });
   run.prop("vase", W / 2 - 700, 1250 + b.scheme.buildup, DOOR + 70);
@@ -726,7 +727,7 @@ function bedroom(b: Builder): RoomSpec {
   return {
     panels: b.panels,
     props: b.props,
-    bounds: { width: W + 600, depth: 4800, height: 2700 },
+    bounds: { width: W + 600, depth: 4800, height: CEILING },
     focus: [0, 1100, 1200],
     detailFocus: [W / 2 - 1200, 560, 450],
     walls: { left: true, right: true },
@@ -822,7 +823,7 @@ function home(s: Scheme): RoomSpec {
       outer: true,
       openings: [
         { c: mid(foy), w: 1100, kind: "door", swing: 1 },
-        { c: mid(foy) + 1300, w: 900, kind: "window", sill: 300, top: 2300 },
+        { c: mid(foy) + 1350, w: 1300, kind: "window", sill: 0, top: 2900 },
       ],
     },
     {
@@ -832,9 +833,9 @@ function home(s: Scheme): RoomSpec {
       b: sz1,
       outer: true,
       openings: [
-        { c: 2400, w: 1400, kind: "window", sill: 900, top: 2250 },
-        { c: (hz0 + hz1) / 2, w: 1200, kind: "window", sill: 300, top: 2300 },
-        { c: sz1 - 2600, w: 1600, kind: "window", sill: 1000, top: 2250 },
+        { c: 2400, w: 2200, kind: "window", sill: 0, top: 2900 },
+        { c: (hz0 + hz1) / 2, w: 1500, kind: "window", sill: 0, top: 2900 },
+        { c: sz1 - 2600, w: 2000, kind: "window", sill: 900, top: 2700 },
       ],
     },
     {
@@ -845,8 +846,8 @@ function home(s: Scheme): RoomSpec {
       outer: true,
       openings: [
         { c: 2400, w: 1000, kind: "window", sill: 1500, top: 2200 },
-        { c: (hz0 + hz1) / 2, w: 1200, kind: "window", sill: 300, top: 2300 },
-        { c: sz0 + 2000, w: 1400, kind: "window", sill: 600, top: 2300 },
+        { c: (hz0 + hz1) / 2, w: 1500, kind: "window", sill: 0, top: 2900 },
+        { c: sz0 + 2000, w: 1800, kind: "window", sill: 0, top: 2900 },
       ],
     },
     // north wing / hall
@@ -919,12 +920,18 @@ function home(s: Scheme): RoomSpec {
   };
   const k = build.kitchen;
   const kcx = mid(kit);
+  // statement lighting: globe pendants over the island, a cluster of glass globes over the lounge
+  if (k.islandFocus) for (const dx of [-750, 0, 750]) props.push({ kind: "pendant", pos: [kcx - k.islandFocus[0] + dx, CEILING, sz1 - k.islandFocus[2]], rotY: 0 });
+  const ct = props.find((pr) => pr.kind === "coffeeTable");
+  if (ct) props.push({ kind: "globeCluster", pos: [ct.pos[0], CEILING, ct.pos[2]], rotY: 0 });
+  // full-height marble feature wall in the entrance, behind the console (the splashback finish)
+  panels.push({ key: `h${n.v++}`, zone: "splashback", size: [2600, CEILING, 18], pos: [foy.x1 - 9, CEILING / 2, sz0 + 2400], rotY: -Math.PI / 2, uvX: 0, mirror: false, order: 0.3 });
   return {
     panels,
     props,
     rooms,
     home: homeSpec,
-    bounds: { width: W, depth: sz1, height: 2700 },
+    bounds: { width: W, depth: sz1, height: CEILING },
     focus: [0, 900, sz1 / 2],
     islandFocus: k.islandFocus ? [kcx - k.islandFocus[0], k.islandFocus[1], sz1 - k.islandFocus[2]] : undefined,
     detailFocus: [kcx - k.detailFocus[0], k.detailFocus[1], sz1 - k.detailFocus[2]],

@@ -934,7 +934,9 @@ function useFittings(lightsOn: boolean, night: boolean) {
   const downlight = getStagingMaterial("downlight", "#ffffff", { emissive: new THREE.Color("#fff6e6"), emissiveIntensity: 3, roughness: 1 });
   const sky = getStagingMaterial("sky", "#ffffff", { emissive: new THREE.Color("#eef3f8"), emissiveIntensity: 1.6, roughness: 1 });
   const led = getStagingMaterial("led", "#fff4e0", { emissive: new THREE.Color("#fff1d6"), emissiveIntensity: 2.4, roughness: 1 });
+  const cove = getStagingMaterial("cove-led", "#fff6e8", { emissive: new THREE.Color("#ffd9a8"), emissiveIntensity: 0, roughness: 1 });
   useEffect(() => {
+    cove.emissiveIntensity = lightsOn ? 3.2 : night ? 0 : 0.15;
     ceiling.emissiveIntensity = night ? (lightsOn ? 0.06 : 0.0) : lightsOn ? 0.46 : 0.38;
     downlight.emissiveIntensity = lightsOn ? 5 : night ? 0 : 0.5;
     downlight.color.set(lightsOn ? "#ffffff" : night ? "#3a3a3a" : "#e8e8e8");
@@ -944,8 +946,8 @@ function useFittings(lightsOn: boolean, night: boolean) {
     sky.color.set(night ? "#0a1320" : "#ffffff");
     sky.emissiveIntensity = night ? 0.22 : 1.6;
     invalidate();
-  }, [lightsOn, night, ceiling, downlight, sky, led, invalidate]);
-  return { ceiling, downlight, sky };
+  }, [lightsOn, night, ceiling, downlight, sky, led, cove, invalidate]);
+  return { ceiling, downlight, sky, cove };
 }
 
 /** A rocker light switch on the wall; click it to switch the room lights. */
@@ -1063,15 +1065,14 @@ function HouseDoor({ leaf, scheme }: { leaf: DoorLeaf; scheme: Scheme }) {
 }
 
 /** A window: frame, mullion and a bright pane (dark blue at night). */
-function HouseWindow({ w: win, frameMat, sky }: { w: WindowPane; frameMat: THREE.Material; sky: THREE.Material }) {
+/** Clear glazing: the garden outside shows through, with a faint reflection. */
+const glassMat = () => getStagingMaterial("glass-pane", "#e6eef0", { roughness: 0.04, metalness: 0, transparent: true, opacity: 0.1, depthWrite: false, side: THREE.DoubleSide, clearcoat: 1 });
+function HouseWindow({ w: win, frameMat }: { w: WindowPane; frameMat: THREE.Material; sky?: THREE.Material }) {
   const rotY = win.axis === "x" ? 0 : Math.PI / 2;
   const h = win.y1 - win.y0;
   return (
     <group position={[win.x, (win.y0 + win.y1) / 2, win.z]} rotation={[0, rotY, 0]}>
-      <mesh material={sky}>
-        <planeGeometry args={[win.w, h]} />
-      </mesh>
-      <mesh material={sky} rotation={[0, Math.PI, 0]}>
+      <mesh material={glassMat()} userData={{ noRoomEnv: true }}>
         <planeGeometry args={[win.w, h]} />
       </mesh>
       {[
@@ -1097,7 +1098,7 @@ function HomeShell({ room, scheme, shadows, onRoom, labels, lightsOn = false, ni
   const cap = getStagingMaterial("wallcap", "#141413", { roughness: 0.8 });
   const frameMat = getStagingMaterial("frame", "#2a2a2a", { roughness: 0.4, metalness: 0.6 });
   const skirting = getStagingMaterial("skirting", STAGING.walls[scheme.wall].color, { roughness: 0.6 });
-  const { ceiling, downlight, sky } = useFittings(lightsOn, night);
+  const { ceiling, downlight, cove } = useFittings(lightsOn, night);
   if (!plan) return null;
   const { H, box } = plan;
   const W = box.x1 - box.x0;
@@ -1139,8 +1140,48 @@ function HomeShell({ room, scheme, shadows, onRoom, labels, lightsOn = false, ni
       {plan.leaves.map((l, i) => (
         <HouseDoor key={i} leaf={l} scheme={scheme} />
       ))}
+      {/* recessed ceiling coves: a dropped border round each room with a warm LED line along its inner edge */}
+      {plan.rooms.map((r, i) => {
+        const B = 0.42, dz = 0.1, y = H - dz / 2;
+        const w = r.x1 - r.x0, d = r.z1 - r.z0;
+        const cx = (r.x0 + r.x1) / 2, cz = (r.z0 + r.z1) / 2;
+        const bands: [number, number, number, number][] = [
+          [cx, r.z0 + B / 2, w, B],
+          [cx, r.z1 - B / 2, w, B],
+          [r.x0 + B / 2, cz, B, d - B * 2],
+          [r.x1 - B / 2, cz, B, d - B * 2],
+        ];
+        return (
+          <group key={`cove${i}`}>
+            {bands.map(([x, z, bw, bd], k) => (
+              <mesh key={k} position={[x, y, z]} material={ceiling} castShadow={false}>
+                <boxGeometry args={[bw, dz, bd]} />
+              </mesh>
+            ))}
+            {/* the glowing line just inside the border */}
+            {[
+              [cx, r.z0 + B + 0.01, w - B * 2, 0.015],
+              [cx, r.z1 - B - 0.01, w - B * 2, 0.015],
+              [r.x0 + B + 0.01, cz, 0.015, d - B * 2],
+              [r.x1 - B - 0.01, cz, 0.015, d - B * 2],
+            ].map(([x, z, bw, bd], k) => (
+              <mesh key={`l${k}`} position={[x, H - dz - 0.004, z]} rotation={[Math.PI / 2, 0, 0]} material={cove}>
+                <planeGeometry args={[bw, bd]} />
+              </mesh>
+            ))}
+          </group>
+        );
+      })}
+      {/* linear light slots along the hall ceiling */}
+      {plan.halls.map((h, i) =>
+        [-0.35, 0.35].map((o) => (
+          <mesh key={`slot${i}${o}`} position={[(h.x0 + h.x1) / 2, H - 0.003, (h.z0 + h.z1) / 2 + o]} rotation={[Math.PI / 2, 0, 0]} material={cove}>
+            <planeGeometry args={[h.x1 - h.x0 - 1.2, 0.035]} />
+          </mesh>
+        )),
+      )}
       {windows.map((w, i) => (
-        <HouseWindow key={i} w={w} frameMat={frameMat} sky={sky} />
+        <HouseWindow key={i} w={w} frameMat={frameMat} />
       ))}
       {downlightPoints(room).map(([x, z], i) => (
         <mesh key={`dl${i}`} position={[x, H - 0.002, z]} rotation={[Math.PI / 2, 0, 0]} material={downlight}>

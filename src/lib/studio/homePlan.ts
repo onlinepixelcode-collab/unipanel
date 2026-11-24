@@ -184,6 +184,8 @@ export function route(plan: HomePlan, from: [number, number], to: [number, numbe
 export function obstacles(plan: HomePlan, room: RoomSpec): Rect[] {
   const out: Rect[] = [];
   for (const w of plan.walls) if (w.y0 < 1.2) out.push({ x0: w.x0, x1: w.x1, z0: w.z0, z1: w.z1 });
+  // glazing is solid too, even where it reaches the floor
+  for (const g of plan.windows) out.push(g.axis === "x" ? { x0: g.x - g.w / 2, x1: g.x + g.w / 2, z0: g.z - WALL / 2, z1: g.z + WALL / 2 } : { x0: g.x - WALL / 2, x1: g.x + WALL / 2, z0: g.z - g.w / 2, z1: g.z + g.w / 2 });
   for (const p of room.panels) {
     const solid = p.staging === "carcass" || p.staging === "worktop" || p.zone === "islandEnds" || p.zone === "gables" || p.zone === "kickplate" || p.door;
     if (!solid) continue;

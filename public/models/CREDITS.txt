@@ -1,0 +1,6 @@
+3D models, fabric textures and the Pretoria Gardens HDRI are from Poly Haven (https://polyhaven.com),
+released under CC0 (public domain). Used as visual staging in the Studio; not UnipanelSA products.
+Models: ceramic_vase_01, ceramic_vase_03,
+potted_plant_02, potted_plant_04, pachira_aquatica_01, standing_picture_frame_01, modern_ceiling_lamp_01.
+Textures: rough_linen, curly_teddy_natural, velour_velvet, poly_wool_herringbone, hessian_380.
+HDRI: pretoria_gardens.
