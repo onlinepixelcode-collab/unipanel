@@ -6,8 +6,9 @@ import { asset } from "@/lib/asset";
 import { CATALOGUE_PAGES, CATALOGUE_PDF } from "@/data/catalogue-book";
 import { hasWebGL } from "@/components/three/quality";
 import { playPageFlip } from "@/lib/audio/pageFlip";
+import { BrandLoader } from "@/components/ui/BrandLoader";
 
-const FlipBook = dynamic(() => import("./FlipBook"), { ssr: false });
+const FlipBook = dynamic(() => import("./FlipBook"), { ssr: false, loading: () => <BrandLoader label="Opening the catalogue" compact /> });
 const SHEETS = Math.ceil(CATALOGUE_PAGES / 2);
 const page = (n: number) => asset(`/catalogue/pages/p-${String(n).padStart(2, "0")}.jpg`);
 

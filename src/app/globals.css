@@ -351,3 +351,6 @@ body {
 .text-champagne-ink {
   color: #7d6400;
 }
+
+/* intro loader: hidden before paint for visitors who already saw it this session */
+.intro-seen .intro-loader { display: none !important; }
