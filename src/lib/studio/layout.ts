@@ -1,0 +1,596 @@
+/**
+ * Parametric room geometry in real millimetres.
+ * Standards: 18mm door boards, 150mm plinth, 720mm base carcass, 900mm worktop height,
+ * 2mm reveal around every front, wall units 1450–2170mm, tall units to 2170mm.
+ *
+ * Coordinates: x right, y up, z out of the back wall (back wall at z = 0).
+ * Every panel carries `uvX` (its left edge along its run) so textures flow
+ * continuously across neighbouring doors (matched grain / vein continuity), and
+ * `mirror` for bookmatched pairs.
+ */
+import type { Scheme, Zone } from "./scheme";
+
+export type StagingKind = "bulkhead" | "led" | "carcass" | "worktop" | "floor" | "wall" | "handle" | "hob" | "sink" | "tap" | "rail" | "tv" | "mirror" | "basin" | "interior-light";
+
+export interface Panel {
+  key: string;
+  zone: Zone | null;
+  staging?: StagingKind;
+  size: [number, number, number];
+  pos: [number, number, number];
+  rotY: number;
+  uvX: number;
+  mirror: boolean;
+  door?: boolean;
+  order: number;
+}
+
+export interface RoomInfo {
+  id: string;
+  name: string;
+  x0: number;
+  x1: number;
+  /** eye-level viewpoint for walking: where you stand and what you look at (mm) */
+  eye: [number, number, number];
+  look: [number, number, number];
+}
+
+export interface RoomSpec {
+  /** Whole-home tour: the rooms laid out side by side, joined by doorways. */
+  rooms?: RoomInfo[];
+  panels: Panel[];
+  bounds: { width: number; depth: number; height: number };
+  focus: [number, number, number];
+  islandFocus?: [number, number, number];
+  detailFocus: [number, number, number];
+  walls: { left: boolean; right: boolean };
+}
+
+const PLINTH = 150;
+const CARCASS = 720;
+const WORKTOP_T = 30;
+const BASE_DEPTH = 560;
+const DOOR = 18;
+const GAP = 2;
+const WALL_BOTTOM = 1450;
+const WALL_H = 950; // wall units run up to 2400mm
+const WALL_DEPTH = 330;
+const TALL_TOP = 2400; // tall units to 2400mm, bulkhead above to the ceiling
+const CEILING = 2700;
+
+type Fixture = "sink" | "hob";
+interface UnitSpec {
+  type: "tall" | "base" | "wardrobe" | "wardrobe-open-hang" | "wardrobe-open-shelf";
+  w: number;
+  front?: "door" | "pair" | "drawers";
+  upper?: "wall" | "shelf" | "none";
+  fixture?: Fixture;
+}
+
+class Builder {
+  panels: Panel[] = [];
+  private n = 0;
+  constructor(private s: Scheme) {}
+  push(p: Omit<Panel, "key" | "order"> & { order?: number }) {
+    this.panels.push({ ...p, key: `p${this.n++}`, order: p.order ?? 0.5 });
+  }
+  get scheme() {
+    return this.s;
+  }
+}
+
+/** A straight run of units against a wall, placed by origin + rotation. */
+class Run {
+  private cos: number;
+  private sin: number;
+  private doorIndex = 0;
+  constructor(
+    private b: Builder,
+    private origin: [number, number],
+    private angle: number,
+  ) {
+    this.cos = Math.cos(angle);
+    this.sin = Math.sin(angle);
+  }
+  /** Add a box by its local min corner (x along run, y up, z out from wall). */
+  add(x: number, y: number, z: number, w: number, h: number, d: number, props: Partial<Panel> & { zone: Zone | null }) {
+    const cx = x + w / 2;
+    const cz = z + d / 2;
+    const wx = this.origin[0] + cx * this.cos + cz * this.sin;
+    const wz = this.origin[1] - cx * this.sin + cz * this.cos;
+    this.b.push({
+      size: [w, h, d],
+      pos: [wx, y + h / 2, wz],
+      rotY: this.angle,
+      uvX: x,
+      mirror: false,
+      ...props,
+    });
+  }
+  /** A door/front with bookmatch bookkeeping. */
+  front(x: number, y: number, z: number, w: number, h: number, zone: Zone, order = 0.8) {
+    const i = this.doorIndex++;
+    this.add(x, y, z, w, h, DOOR, { zone, door: true, mirror: this.b.scheme.bookmatch && i % 2 === 1, order });
+  }
+  resetPairs() {
+    this.doorIndex = 0;
+  }
+  handle(x: number, y: number, z: number, w: number, h: number, orientation: "top" | "bottom" | "side-r" | "side-l") {
+    const style = this.b.scheme.handle;
+    if (style === "push") return;
+    if (style === "jprofile") {
+      if (orientation === "top") this.add(x + GAP, y + h - 22, z + DOOR, w - GAP * 2, 22, 3, { zone: null, staging: "handle", order: 0.95 });
+      else if (orientation === "bottom") this.add(x + GAP, y, z + DOOR, w - GAP * 2, 22, 3, { zone: null, staging: "handle", order: 0.95 });
+      else this.add(orientation === "side-r" ? x + w - 22 : x, y + GAP, z + DOOR, 22, h - GAP * 2, 3, { zone: null, staging: "handle", order: 0.95 });
+      return;
+    }
+    // slim bar on standoffs
+    const t = 12;
+    if (orientation === "top" || orientation === "bottom") {
+      const len = Math.min(w - 140, 320);
+      const by = orientation === "top" ? y + h - 70 : y + 58;
+      this.add(x + (w - len) / 2, by, z + DOOR + 22, len, t, t, { zone: null, staging: "handle", order: 0.95 });
+    } else {
+      const len = Math.min(h - 200, 640);
+      const bx = orientation === "side-r" ? x + w - 60 : x + 48;
+      this.add(bx, y + (h - len) / 2, z + DOOR + 22, t, len, t, { zone: null, staging: "handle", order: 0.95 });
+    }
+  }
+}
+
+// ---------------------------------------------------------------- kitchen
+
+function buildKitchenRun(b: Builder, run: Run, units: UnitSpec[], opts: { gableStart: boolean; gableEnd: boolean; base: number }) {
+  const s = b.scheme;
+  let x = 0;
+  const total = units.reduce((a, u) => a + u.w, 0);
+  // plinth / kickplate, recessed 50mm
+  run.add(0, 0, BASE_DEPTH - 50, total, PLINTH, DOOR, { zone: "kickplate", order: 0.15 });
+
+  let worktopStart: number | null = null;
+  const closeWorktop = (end: number) => {
+    if (worktopStart === null) return;
+    run.add(worktopStart, PLINTH + CARCASS, 0, end - worktopStart, WORKTOP_T, 620, { zone: null, staging: "worktop", order: 0.6 });
+    worktopStart = null;
+  };
+
+  for (const u of units) {
+    if (u.type === "tall") {
+      closeWorktop(x);
+      run.add(x, PLINTH, 0, u.w, TALL_TOP - PLINTH, BASE_DEPTH, { zone: null, staging: "carcass", order: 0.25 });
+      run.front(x + GAP, PLINTH + GAP, BASE_DEPTH, u.w - GAP * 2, TALL_TOP - PLINTH - GAP * 2, "tallUnits");
+      run.handle(x + GAP, PLINTH + GAP, BASE_DEPTH, u.w - GAP * 2, TALL_TOP - PLINTH - GAP * 2, "side-r");
+      run.add(x, TALL_TOP, 0, u.w, CEILING - TALL_TOP, BASE_DEPTH + DOOR, { zone: null, staging: "bulkhead", order: 0.98 });
+    } else {
+      if (worktopStart === null) worktopStart = x;
+      run.add(x, PLINTH, 0, u.w, CARCASS, BASE_DEPTH, { zone: null, staging: "carcass", order: 0.25 });
+      const fy = PLINTH + GAP;
+      const fh = CARCASS - GAP * 2;
+      if (u.front === "drawers") {
+        const hs = [176, 268, 268];
+        let y = PLINTH + CARCASS;
+        run.resetPairs();
+        for (const h of hs) {
+          y -= h;
+          run.front(x + GAP, y + GAP / 2, BASE_DEPTH, u.w - GAP * 2, h - GAP, "baseDoors");
+          run.handle(x + GAP, y + GAP / 2, BASE_DEPTH, u.w - GAP * 2, h - GAP, "top");
+        }
+      } else if (u.front === "pair") {
+        const hw = u.w / 2;
+        run.front(x + GAP, fy, BASE_DEPTH, hw - GAP * 1.5, fh, "baseDoors");
+        run.front(x + hw + GAP / 2, fy, BASE_DEPTH, hw - GAP * 1.5, fh, "baseDoors");
+        run.handle(x + GAP, fy, BASE_DEPTH, hw - GAP * 1.5, fh, "top");
+        run.handle(x + hw + GAP / 2, fy, BASE_DEPTH, hw - GAP * 1.5, fh, "top");
+      } else {
+        run.front(x + GAP, fy, BASE_DEPTH, u.w - GAP * 2, fh, "baseDoors");
+        run.handle(x + GAP, fy, BASE_DEPTH, u.w - GAP * 2, fh, "top");
+      }
+
+      if (u.fixture === "sink") {
+        run.add(x + (u.w - 560) / 2, PLINTH + CARCASS + WORKTOP_T - 2, 90, 560, 4, 400, { zone: null, staging: "sink", order: 0.9 });
+        run.add(x + u.w / 2 - 15, PLINTH + CARCASS + WORKTOP_T, 40, 30, 300, 30, { zone: null, staging: "tap", order: 0.92 });
+      }
+      if (u.fixture === "hob") run.add(x + (u.w - 580) / 2, PLINTH + CARCASS + WORKTOP_T, 60, 580, 5, 500, { zone: null, staging: "hob", order: 0.9 });
+
+      if (u.upper === "wall") {
+        run.add(x, WALL_BOTTOM, 0, u.w, WALL_H, WALL_DEPTH, { zone: null, staging: "carcass", order: 0.4 });
+        run.front(x + GAP, WALL_BOTTOM + GAP, WALL_DEPTH, u.w - GAP * 2, WALL_H - GAP * 2, "wallDoors");
+        run.handle(x + GAP, WALL_BOTTOM + GAP, WALL_DEPTH, u.w - GAP * 2, WALL_H - GAP * 2, "bottom");
+        run.add(x, PLINTH + CARCASS + WORKTOP_T, 0, u.w, WALL_BOTTOM - (PLINTH + CARCASS + WORKTOP_T), 12, { zone: "splashback", order: 0.55 });
+        run.add(x, WALL_BOTTOM + WALL_H, 0, u.w, CEILING - WALL_BOTTOM - WALL_H, WALL_DEPTH + DOOR, { zone: null, staging: "bulkhead", order: 0.98 });
+        // under-cabinet LED strip (visual staging)
+        run.add(x + 25, WALL_BOTTOM - 5, WALL_DEPTH - 70, u.w - 50, 5, 14, { zone: null, staging: "led", order: 0.96 });
+      } else if (u.upper === "shelf") {
+        run.add(x, PLINTH + CARCASS + WORKTOP_T, 0, u.w, 2400 - (PLINTH + CARCASS + WORKTOP_T), DOOR, { zone: "cladding", order: 0.5 });
+        for (const sy of [1340, 1800]) {
+          run.add(x + 30, sy, DOOR, u.w - 60, s.buildup, 290, { zone: "shelving", order: 0.85 });
+        }
+      }
+    }
+    x += u.w;
+  }
+  closeWorktop(x);
+
+  const tallStart = units[0]?.type === "tall";
+  const tallEnd = units[units.length - 1]?.type === "tall";
+  if (opts.gableStart) run.add(-DOOR, 0, 0, DOOR, tallStart ? CEILING : PLINTH + CARCASS + WORKTOP_T, BASE_DEPTH + DOOR + 2, { zone: "gables", order: 0.3 });
+  if (opts.gableEnd) run.add(total, 0, 0, DOOR, tallEnd ? CEILING : PLINTH + CARCASS + WORKTOP_T, BASE_DEPTH + DOOR + 2, { zone: "gables", order: 0.3 });
+  return total;
+}
+
+function buildIsland(b: Builder, centerZ: number, cx = 0) {
+  const len = 2400;
+  const depth = 1000;
+  const zFront = centerZ - depth / 2; // cook side
+  // run facing the back wall (rotated 180°)
+  const run = new Run(b, [cx + len / 2, zFront + 600], Math.PI);
+  run.add(0, 0, BASE_DEPTH - 50, len, PLINTH, DOOR, { zone: "kickplate", order: 0.15 });
+  const widths = [600, 600, 600, 600];
+  let x = 0;
+  widths.forEach((w, i) => {
+    run.add(x, PLINTH, 0, w, CARCASS, BASE_DEPTH, { zone: null, staging: "carcass", order: 0.25 });
+    if (i % 2 === 0) {
+      const hs = [176, 268, 268];
+      let y = PLINTH + CARCASS;
+      for (const h of hs) {
+        y -= h;
+        run.front(x + GAP, y + GAP / 2, BASE_DEPTH, w - GAP * 2, h - GAP, "islandFronts");
+        run.handle(x + GAP, y + GAP / 2, BASE_DEPTH, w - GAP * 2, h - GAP, "top");
+      }
+    } else {
+      run.front(x + GAP, PLINTH + GAP, BASE_DEPTH, w - GAP * 2, CARCASS - GAP * 2, "islandFronts");
+      run.handle(x + GAP, PLINTH + GAP, BASE_DEPTH, w - GAP * 2, CARCASS - GAP * 2, "top");
+    }
+    x += w;
+  });
+  // hob on the island
+  run.add(900, PLINTH + CARCASS + WORKTOP_T, 80, 580, 5, 480, { zone: null, staging: "hob", order: 0.9 });
+  // seating-side back panel (part of the island fronts)
+  const back = new Run(b, [cx - len / 2, zFront + 600], 0);
+  back.add(0, 0, 0, len, PLINTH + CARCASS, DOOR, { zone: "islandFronts", order: 0.35, uvX: 0 });
+  // waterfall end panels
+  for (const side of [-1, 1]) {
+    b.push({
+      zone: "islandEnds",
+      size: [DOOR, PLINTH + CARCASS + WORKTOP_T, depth],
+      pos: [cx + side * (len / 2 + DOOR / 2), (PLINTH + CARCASS + WORKTOP_T) / 2, centerZ],
+      rotY: 0,
+      uvX: 0,
+      mirror: side > 0 && b.scheme.bookmatch,
+      order: 0.45,
+    });
+  }
+  // worktop
+  b.push({ zone: null, staging: "worktop", size: [len, WORKTOP_T, depth], pos: [cx, PLINTH + CARCASS + WORKTOP_T / 2, centerZ], rotY: 0, uvX: 0, mirror: false, order: 0.65 });
+}
+
+/** A peninsula running out from the back run: fronts face the kitchen, a seating overhang on the other side, waterfall end. */
+function buildPeninsula(b: Builder, ox: number) {
+  const len = 2400;
+  const z0 = 600;
+  // local x runs along +z, fronts face -x
+  const run = new Run(b, [ox, z0], -Math.PI / 2);
+  run.add(0, 0, BASE_DEPTH - 50, len, PLINTH, DOOR, { zone: "kickplate", order: 0.15 });
+  for (let i = 0; i < 4; i++) {
+    const x = i * 600;
+    run.add(x, PLINTH, 0, 600, CARCASS, BASE_DEPTH, { zone: null, staging: "carcass", order: 0.25 });
+    if (i % 2 === 0) {
+      let y = PLINTH + CARCASS;
+      for (const h of [176, 268, 268]) {
+        y -= h;
+        run.front(x + GAP, y + GAP / 2, BASE_DEPTH, 600 - GAP * 2, h - GAP, "islandFronts");
+        run.handle(x + GAP, y + GAP / 2, BASE_DEPTH, 600 - GAP * 2, h - GAP, "top");
+      }
+    } else {
+      run.front(x + GAP, PLINTH + GAP, BASE_DEPTH, 600 - GAP * 2, CARCASS - GAP * 2, "islandFronts");
+      run.handle(x + GAP, PLINTH + GAP, BASE_DEPTH, 600 - GAP * 2, CARCASS - GAP * 2, "top");
+    }
+  }
+  // seating side back panel and overhang worktop
+  run.add(0, 0, -DOOR, len, PLINTH + CARCASS, DOOR, { zone: "islandFronts", order: 0.35 });
+  run.add(0, PLINTH + CARCASS, -320, len, WORKTOP_T, 920, { zone: null, staging: "worktop", order: 0.6 });
+  run.add(1100, PLINTH + CARCASS + WORKTOP_T, 80, 580, 5, 480, { zone: null, staging: "hob", order: 0.9 });
+  // waterfall end
+  run.add(len, 0, -320, DOOR, PLINTH + CARCASS + WORKTOP_T, 920, { zone: "islandEnds", order: 0.45 });
+}
+
+function kitchen(b: Builder): RoomSpec {
+  const layout = b.scheme.layout;
+  const back: UnitSpec[] = [
+    { type: "tall", w: 600 },
+    { type: "tall", w: 600 },
+    { type: "base", w: 600, front: "drawers", upper: "wall", fixture: layout === "island" || layout === "l-island" || layout === "peninsula" ? undefined : "hob" },
+    { type: "base", w: 900, front: "pair", upper: "wall", fixture: "sink" },
+    { type: "base", w: 600, front: "door", upper: "wall" },
+    { type: "base", w: 600, front: "drawers", upper: "shelf" },
+    { type: "base", w: 600, front: "door", upper: "shelf" },
+  ];
+  const backLen = back.reduce((a, u) => a + u.w, 0); // 4500
+  let width = backLen + 600;
+  let depth = 4600;
+  const walls = { left: true, right: true };
+  let backX = -backLen / 2;
+
+  const isL = layout === "l" || layout === "u" || layout === "l-island";
+  if (isL || layout === "peninsula") width = backLen + 1400;
+  if (isL) backX = -width / 2 + 600; // leave the corner to the return run
+  const backRun = new Run(b, [backX, 0], 0);
+  buildKitchenRun(b, backRun, back, { gableStart: !isL, gableEnd: layout !== "u" && layout !== "peninsula", base: 0 });
+
+  if (isL) {
+    const ret: UnitSpec[] = [
+      { type: "base", w: 600, front: "door", upper: "none" },
+      { type: "base", w: 600, front: "drawers", upper: "none" },
+      { type: "base", w: 600, front: "door", upper: "none" },
+      { type: "base", w: 600, front: "pair", upper: "none" },
+    ];
+    const len = ret.reduce((a, u) => a + u.w, 0);
+    // left wall: run goes front → back so fronts face +x
+    const leftRun = new Run(b, [-width / 2, 600 + len], Math.PI / 2);
+    buildKitchenRun(b, leftRun, ret, { gableStart: true, gableEnd: false, base: 0 });
+    // corner worktop + carcass filler
+    b.push({ zone: null, staging: "carcass", size: [600, CARCASS, 600], pos: [-width / 2 + 300, PLINTH + CARCASS / 2, 300], rotY: 0, uvX: 0, mirror: false, order: 0.25 });
+    b.push({ zone: null, staging: "worktop", size: [600, WORKTOP_T, 620], pos: [-width / 2 + 300, PLINTH + CARCASS + WORKTOP_T / 2, 310], rotY: 0, uvX: 0, mirror: false, order: 0.6 });
+    b.push({ zone: "kickplate", size: [600, PLINTH, DOOR], pos: [-width / 2 + 300, PLINTH / 2, BASE_DEPTH - 41], rotY: 0, uvX: 0, mirror: false, order: 0.15 });
+    if (layout === "u") {
+      const rightRun = new Run(b, [width / 2, 600], -Math.PI / 2);
+      const retR = ret.slice(0, 3);
+      buildKitchenRun(b, rightRun, retR, { gableStart: false, gableEnd: true, base: 0 });
+      // back-right corner filler (back run ends at backX+backLen)
+      const gapStart = backX + backLen;
+      const gapW = width / 2 - gapStart;
+      if (gapW > 0) {
+        b.push({ zone: null, staging: "carcass", size: [gapW, CARCASS, 600], pos: [gapStart + gapW / 2, PLINTH + CARCASS / 2, 300], rotY: 0, uvX: 0, mirror: false, order: 0.25 });
+        b.push({ zone: null, staging: "worktop", size: [gapW, WORKTOP_T, 620], pos: [gapStart + gapW / 2, PLINTH + CARCASS + WORKTOP_T / 2, 310], rotY: 0, uvX: 0, mirror: false, order: 0.6 });
+        b.push({ zone: "kickplate", size: [gapW, PLINTH, DOOR], pos: [gapStart + gapW / 2, PLINTH / 2, BASE_DEPTH - 41], rotY: 0, uvX: 0, mirror: false, order: 0.15 });
+      }
+    }
+  }
+
+  if (layout === "galley") {
+    const opp: UnitSpec[] = [
+      { type: "base", w: 600, front: "drawers", upper: "none" },
+      { type: "base", w: 600, front: "door", upper: "none", fixture: "hob" },
+      { type: "base", w: 900, front: "pair", upper: "none" },
+      { type: "base", w: 600, front: "drawers", upper: "none" },
+      { type: "base", w: 600, front: "door", upper: "none" },
+    ];
+    const len = opp.reduce((a, u) => a + u.w, 0);
+    const z = 600 + 1300 + 600;
+    const oppRun = new Run(b, [len / 2, z], Math.PI);
+    buildKitchenRun(b, oppRun, opp, { gableStart: true, gableEnd: true, base: 0 });
+    depth = z + 1800;
+  }
+
+  let islandFocus: [number, number, number] | undefined;
+  if (layout === "island" || layout === "l-island") {
+    const cx = layout === "l-island" ? 350 : 0;
+    buildIsland(b, 2350, cx);
+    islandFocus = [cx, 900, 2350];
+  }
+  if (layout === "peninsula") {
+    const ox = backX + backLen; // runs out from the end of the back run
+    buildPeninsula(b, ox);
+    islandFocus = [ox - 300, 900, 1800];
+  }
+
+  return {
+    panels: b.panels,
+    bounds: { width, depth, height: 2700 },
+    focus: [0, 1100, 900],
+    islandFocus,
+    detailFocus: [backX + 600 * 2 + 300, 700, 600],
+    walls,
+  };
+}
+
+// ---------------------------------------------------------------- wardrobe
+
+function wardrobeRun(b: Builder, run: Run, units: UnitSpec[]) {
+  const H = 2400;
+  const K = 100;
+  let x = 0;
+  const total = units.reduce((a, u) => a + u.w, 0);
+  run.add(0, 0, BASE_DEPTH - 50, total, K, DOOR, { zone: "kickplate", order: 0.15 });
+  for (const u of units) {
+    if (u.type === "wardrobe") {
+      run.add(x, K, 0, u.w, H - K, BASE_DEPTH, { zone: null, staging: "carcass", order: 0.25 });
+      run.front(x + GAP, K + GAP, BASE_DEPTH, u.w - GAP * 2, H - K - GAP * 2, "wardrobeDoors");
+      run.handle(x + GAP, K + GAP, BASE_DEPTH, u.w - GAP * 2, H - K - GAP * 2, "side-r");
+    } else {
+      // open bay: interior shell in the interior finish
+      run.add(x, K, 0, u.w, H - K, DOOR, { zone: "wardrobeInterior", order: 0.3 });
+      run.add(x, K, DOOR, DOOR, H - K, BASE_DEPTH - DOOR, { zone: "wardrobeInterior", order: 0.3 });
+      run.add(x + u.w - DOOR, K, DOOR, DOOR, H - K, BASE_DEPTH - DOOR, { zone: "wardrobeInterior", order: 0.3 });
+      run.add(x + DOOR, K, DOOR, u.w - DOOR * 2, DOOR, BASE_DEPTH - DOOR, { zone: "wardrobeInterior", order: 0.3 });
+      run.add(x + DOOR, H - DOOR, DOOR, u.w - DOOR * 2, DOOR, BASE_DEPTH - DOOR, { zone: "wardrobeInterior", order: 0.3 });
+      if (u.type === "wardrobe-open-hang") {
+        run.add(x + DOOR, 1900, DOOR, u.w - DOOR * 2, b.scheme.buildup, BASE_DEPTH - DOOR, { zone: "shelving", order: 0.8 });
+        run.add(x + DOOR, 1820, BASE_DEPTH / 2, u.w - DOOR * 2, 16, 16, { zone: null, staging: "rail", order: 0.9 });
+      } else {
+        for (const sy of [520, 920, 1320, 1720, 2060]) run.add(x + DOOR, sy, DOOR, u.w - DOOR * 2, b.scheme.buildup, BASE_DEPTH - DOOR - 20, { zone: "shelving", order: 0.8 });
+      }
+    }
+    x += u.w;
+  }
+  run.add(-DOOR, 0, 0, DOOR, H, BASE_DEPTH + DOOR + 2, { zone: "gables", order: 0.3 });
+  run.add(total, 0, 0, DOOR, H, BASE_DEPTH + DOOR + 2, { zone: "gables", order: 0.3 });
+  return total;
+}
+
+function wardrobe(b: Builder): RoomSpec {
+  const width = 5200;
+  const back: UnitSpec[] = [
+    { type: "wardrobe", w: 600 },
+    { type: "wardrobe", w: 600 },
+    { type: "wardrobe-open-hang", w: 800 },
+    { type: "wardrobe-open-shelf", w: 600 },
+    { type: "wardrobe", w: 600 },
+    { type: "wardrobe", w: 600 },
+  ];
+  const backLen = back.reduce((a, u) => a + u.w, 0);
+  wardrobeRun(b, new Run(b, [-backLen / 2, 0], 0), back);
+  // feature cladding on the back wall either side of the run
+  const bay = (width - backLen) / 2 - DOOR - 2;
+  const wall = new Run(b, [-width / 2, 0], 0);
+  wall.add(0, 0, 0, bay, 2700, DOOR, { zone: "cladding", order: 0.2 });
+  wall.add(width - bay, 0, 0, bay, 2700, DOOR, { zone: "cladding", order: 0.2, uvX: 0 });
+  const side: UnitSpec[] = [
+    { type: "wardrobe", w: 600 },
+    { type: "wardrobe-open-shelf", w: 600 },
+    { type: "wardrobe", w: 600 },
+  ];
+  wardrobeRun(b, new Run(b, [-width / 2, 800 + 1800], Math.PI / 2), side);
+  wardrobeRun(b, new Run(b, [width / 2, 800], -Math.PI / 2), [side[0], { type: "wardrobe-open-hang", w: 600 }, side[2]]);
+
+  // dresser island
+  const isl = new Run(b, [-600, 2000], 0);
+  isl.add(0, 0, 0, 1200, 100, 600, { zone: "kickplate", order: 0.15 });
+  isl.add(0, 100, 0, 1200, 780, 582, { zone: null, staging: "carcass", order: 0.25 });
+  for (const [i, h] of [260, 260, 260].entries()) {
+    const y = 100 + i * 260;
+    isl.front(GAP, y + GAP / 2, 582, 600 - GAP * 1.5, h - GAP, "wardrobeDoors");
+    isl.front(600 + GAP / 2, y + GAP / 2, 582, 600 - GAP * 1.5, h - GAP, "wardrobeDoors");
+    isl.handle(GAP, y + GAP / 2, 582, 600 - GAP * 1.5, h - GAP, "top");
+    isl.handle(600 + GAP / 2, y + GAP / 2, 582, 600 - GAP * 1.5, h - GAP, "top");
+  }
+  isl.add(-DOOR, 0, 0, DOOR, 900, 600, { zone: "gables", order: 0.3 });
+  isl.add(1200, 0, 0, DOOR, 900, 600, { zone: "gables", order: 0.3 });
+  isl.add(-DOOR, 880, 0, 1200 + DOOR * 2, b.scheme.buildup, 600, { zone: "shelving", order: 0.7 });
+
+  return {
+    panels: b.panels,
+    bounds: { width, depth: 4800, height: 2700 },
+    focus: [0, 1200, 1200],
+    detailFocus: [-backLen / 2 + 900, 1300, 600],
+    walls: { left: true, right: true },
+  };
+}
+
+// ---------------------------------------------------------------- media wall
+
+function media(b: Builder): RoomSpec {
+  const W = 4200;
+  const wallRun = new Run(b, [-W / 2, 0], 0);
+  wallRun.add(0, 0, 0, W, 2700, DOOR, { zone: "cladding", order: 0.2 });
+  // tall units at each end
+  for (const x of [0, W - 600]) {
+    wallRun.add(x, 0, DOOR, 600, 2400, 400, { zone: null, staging: "carcass", order: 0.3 });
+    wallRun.front(x + GAP, GAP, DOOR + 400, 600 - GAP * 2, 2400 - GAP * 2, "tallUnits");
+    wallRun.handle(x + GAP, GAP, DOOR + 400, 600 - GAP * 2, 2400 - GAP * 2, x === 0 ? "side-r" : "side-l");
+    wallRun.add(x === 0 ? 600 : x - DOOR, 0, DOOR, DOOR, 2400, 420, { zone: "gables", order: 0.35 });
+  }
+  // floating TV unit
+  const tvW = 2600;
+  const tvX = (W - tvW) / 2;
+  wallRun.add(tvX, 260, DOOR, tvW, 420, 420, { zone: null, staging: "carcass", order: 0.4 });
+  for (let i = 0; i < 4; i++) {
+    wallRun.front(tvX + i * (tvW / 4) + GAP, 260 + GAP, DOOR + 420, tvW / 4 - GAP * 2, 420 - GAP * 2, "baseDoors");
+    wallRun.handle(tvX + i * (tvW / 4) + GAP, 260 + GAP, DOOR + 420, tvW / 4 - GAP * 2, 420 - GAP * 2, "top");
+  }
+  wallRun.add(tvX, 680, DOOR, tvW, b.scheme.buildup, 440, { zone: "shelving", order: 0.7 });
+  // floating build-up shelves either side of the screen
+  for (const sx of [tvX + 60, tvX + tvW - 560]) {
+    for (const sy of [1350, 1800]) wallRun.add(sx, sy, DOOR, 500, b.scheme.buildup, 280, { zone: "shelving", order: 0.8 });
+  }
+  wallRun.add((W - 1450) / 2, 1080, DOOR, 1450, 820, 40, { zone: null, staging: "tv", order: 0.95 });
+  return {
+    panels: b.panels,
+    bounds: { width: W + 800, depth: 4600, height: 2700 },
+    focus: [0, 1200, 400],
+    detailFocus: [0, 700, 450],
+    walls: { left: true, right: true },
+  };
+}
+
+// ---------------------------------------------------------------- vanity
+
+function vanity(b: Builder): RoomSpec {
+  const W = 3000;
+  const run = new Run(b, [-W / 2, 0], 0);
+  run.add(0, 0, 0, W, 2700, DOOR, { zone: "cladding", order: 0.2 });
+  const vx = 600;
+  const vw = 1400;
+  run.add(vx, 420, DOOR, vw, 450, 470, { zone: null, staging: "carcass", order: 0.3 });
+  run.front(vx + GAP, 420 + GAP, DOOR + 470, vw / 2 - GAP * 1.5, 450 - GAP * 2, "baseDoors");
+  run.front(vx + vw / 2 + GAP / 2, 420 + GAP, DOOR + 470, vw / 2 - GAP * 1.5, 450 - GAP * 2, "baseDoors");
+  run.handle(vx + GAP, 420 + GAP, DOOR + 470, vw / 2 - GAP * 1.5, 450 - GAP * 2, "top");
+  run.handle(vx + vw / 2 + GAP / 2, 420 + GAP, DOOR + 470, vw / 2 - GAP * 1.5, 450 - GAP * 2, "top");
+  run.add(vx - DOOR, 420, DOOR, DOOR, 480, 490, { zone: "gables", order: 0.35 });
+  run.add(vx + vw, 420, DOOR, DOOR, 480, 490, { zone: "gables", order: 0.35 });
+  run.add(vx, 870, DOOR, vw, 30, 490, { zone: null, staging: "worktop", order: 0.6 });
+  run.add(vx + vw / 2 - 260, 900, DOOR + 70, 520, 120, 380, { zone: null, staging: "basin", order: 0.9 });
+  run.add(vx + vw / 2 - 15, 900, DOOR + 20, 30, 260, 30, { zone: null, staging: "tap", order: 0.92 });
+  run.add(vx, 900, DOOR, vw, 600, 12, { zone: "splashback", order: 0.5 });
+  // mirror cabinet
+  run.add(vx + 150, 1560, DOOR, vw - 300, 700, 150, { zone: null, staging: "carcass", order: 0.6 });
+  run.front(vx + 150 + GAP, 1560 + GAP, DOOR + 150, (vw - 300) / 2 - GAP * 1.5, 700 - GAP * 2, "wallDoors");
+  run.front(vx + 150 + (vw - 300) / 2 + GAP / 2, 1560 + GAP, DOOR + 150, (vw - 300) / 2 - GAP * 1.5, 700 - GAP * 2, "wallDoors");
+  // open build-up shelving beside the vanity
+  for (const sy of [1100, 1450, 1800]) run.add(vx + vw + 200, sy, DOOR, 520, b.scheme.buildup, 240, { zone: "shelving", order: 0.8 });
+  return {
+    panels: b.panels,
+    bounds: { width: W + 600, depth: 3600, height: 2700 },
+    focus: [-W / 2 + vx + vw / 2, 1100, 400],
+    detailFocus: [-W / 2 + vx + vw / 2, 640, 500],
+    walls: { left: true, right: true },
+  };
+}
+
+const HOME_DEPTH = 4800;
+
+/** Kitchen, lounge, bedroom (walk-in wardrobe) and bathroom side by side, joined by doorways. */
+function home(s: Scheme): RoomSpec {
+  const parts: { id: string; name: string; spec: RoomSpec }[] = [
+    { id: "kitchen", name: "Kitchen", spec: kitchen(new Builder({ ...s, scene: "kitchen", layout: s.layout === "straight" || s.layout === "galley" ? s.layout : "island" })) },
+    { id: "lounge", name: "Lounge", spec: media(new Builder({ ...s, scene: "media" })) },
+    { id: "bedroom", name: "Bedroom & wardrobe", spec: wardrobe(new Builder({ ...s, scene: "wardrobe" })) },
+    { id: "bathroom", name: "Bathroom", spec: vanity(new Builder({ ...s, scene: "vanity" })) },
+  ];
+  const panels: Panel[] = [];
+  const rooms: RoomInfo[] = [];
+  let cursor = 0;
+  let n = 0;
+  for (const p of parts) {
+    const span = p.spec.bounds.width + 600; // the room's own wall-to-wall width
+    const cx = cursor + span / 2;
+    for (const pn of p.spec.panels) panels.push({ ...pn, key: `h${n++}`, pos: [pn.pos[0] + cx, pn.pos[1], pn.pos[2]] });
+    rooms.push({ id: p.id, name: p.name, x0: cursor, x1: cursor + span, eye: [cx + span * 0.18, 1600, HOME_DEPTH - 500], look: [cx - span * 0.05, 1250, 600] });
+    cursor += span + 120; // partition wall
+  }
+  const total = cursor - 120;
+  // centre the house on x = 0
+  const shift = -total / 2;
+  for (const pn of panels) pn.pos[0] += shift;
+  for (const r of rooms) {
+    r.x0 += shift;
+    r.x1 += shift;
+    r.eye[0] += shift;
+    r.look[0] += shift;
+  }
+  const k = parts[0].spec;
+  return {
+    panels,
+    rooms,
+    bounds: { width: total, depth: HOME_DEPTH, height: 2700 },
+    focus: [0, 900, HOME_DEPTH / 2],
+    islandFocus: k.islandFocus ? [k.islandFocus[0] + rooms[0].x0 + (rooms[0].x1 - rooms[0].x0) / 2, k.islandFocus[1], k.islandFocus[2]] : undefined,
+    detailFocus: [k.detailFocus[0] + rooms[0].x0 + (rooms[0].x1 - rooms[0].x0) / 2, k.detailFocus[1], k.detailFocus[2]],
+    walls: { left: true, right: true },
+  };
+}
+
+export function buildRoom(s: Scheme): RoomSpec {
+  if (s.scene === "home") return home(s);
+  const b = new Builder(s);
+  switch (s.scene) {
+    case "wardrobe":
+      return wardrobe(b);
+    case "media":
+      return media(b);
+    case "vanity":
+      return vanity(b);
+    default:
+      return kitchen(b);
+  }
+}
