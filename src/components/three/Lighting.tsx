@@ -4,20 +4,22 @@ import { useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import { Environment, Lightformer } from "@react-three/drei";
 import type { Mood } from "@/lib/studio/scheme";
+import { bumpShadows } from "./shadowState";
 
 /**
  * Image-based lighting built from softboxes rendered into a cube map on the GPU
  * (no external HDRI download). Each mood changes the softbox colour temperature,
  * the key light angle and the overall exposure; transitions are smoothed per frame.
  */
-export const MOODS: Record<Mood, { label: string; key: string; fill: string; keyIntensity: number; env: number; hemi: number; sun: [number, number, number]; bg: string; exposure: number; night?: boolean }> = {
-  gallery: { label: "Gallery", key: "#ffffff", fill: "#f6f6f4", keyIntensity: 3, env: 1.05, hemi: 0.18, sun: [2.2, 4.6, 4.2], bg: "#0e0e0d", exposure: 1.18 },
+export const MOODS: Record<Mood, { label: string; key: string; fill: string; keyIntensity: number; env: number; hemi: number; amb: number; sun: [number, number, number]; bg: string; exposure: number; night?: boolean }> = {
+  gallery: { label: "Gallery", key: "#ffffff", fill: "#f6f6f4", keyIntensity: 2.6, env: 1.05, hemi: 0.18, amb: 1.5, sun: [2.2, 4.6, 4.2], bg: "#0e0e0d", exposure: 1.05 },
   // daylight: a stronger, lower sun with less fill so cast shadows read clearly
-  morning: { label: "Daylight", key: "#fff6e8", fill: "#e8eef7", keyIntensity: 5.2, env: 1.1, hemi: 0.24, sun: [6.2, 3.6, 1.1], bg: "#121417", exposure: 1.15 },
-  golden: { label: "Golden hour", key: "#ffc180", fill: "#ffe4c6", keyIntensity: 4.6, env: 0.85, hemi: 0.2, sun: [6.4, 2.1, 0.9], bg: "#15100b", exposure: 1.1 },
-  evening: { label: "Evening 2700K", key: "#ffbd7a", fill: "#ffdab0", keyIntensity: 1.2, env: 0.4, hemi: 0.12, sun: [0.5, 2.6, 2.5], bg: "#0b0907", exposure: 1 },
+  // white light and a neutral exposure, so finishes read at their true colour
+  morning: { label: "Daylight", key: "#fffaf3", fill: "#f7f8fa", keyIntensity: 2.6, env: 1.0, hemi: 0.3, amb: 1.5, sun: [6.2, 3.6, 1.1], bg: "#121417", exposure: 1 },
+  golden: { label: "Golden hour", key: "#ffc180", fill: "#ffe4c6", keyIntensity: 3.0, env: 0.8, hemi: 0.24, amb: 1.0, sun: [6.4, 2.1, 0.9], bg: "#15100b", exposure: 1 },
+  evening: { label: "Evening 2700K", key: "#ffbd7a", fill: "#ffdab0", keyIntensity: 1.2, env: 0.4, hemi: 0.12, amb: 0.3, sun: [0.5, 2.6, 2.5], bg: "#0b0907", exposure: 1 },
   // night: faint blue moonlight through the window; the room's own lights do the work
-  night: { label: "Night", key: "#8ea6d0", fill: "#5d6b85", keyIntensity: 0.28, env: 0.07, hemi: 0.04, sun: [5, 3.2, 1.6], bg: "#05070a", exposure: 1.05, night: true },
+  night: { label: "Night", key: "#8ea6d0", fill: "#5d6b85", keyIntensity: 0.28, env: 0.07, hemi: 0.04, amb: 0.02, sun: [5, 3.2, 1.6], bg: "#05070a", exposure: 1.05, night: true },
 };
 
 /**
@@ -33,6 +35,7 @@ export function Lighting({ mood, shadows, shadowMapSize = 2048, span = 6 }: { mo
   const half = wide ? span / 2 + 1.5 : 5;
   const sun = useRef<THREE.DirectionalLight>(null);
   const hemi = useRef<THREE.HemisphereLight>(null);
+  const amb = useRef<THREE.AmbientLight>(null);
   const { scene, gl, invalidate } = useThree();
   const target = useRef(new THREE.Vector3());
   const color = useRef(new THREE.Color());
@@ -60,8 +63,17 @@ export function Lighting({ mood, shadows, shadowMapSize = 2048, span = 6 }: { mo
       if (Math.abs(hemi.current.intensity - hTarget) > 0.002) moving = true;
       hemi.current.intensity += (hTarget - hemi.current.intensity) * k;
     }
+    if (amb.current) {
+      if (Math.abs(amb.current.intensity - m.amb) > 0.002) moving = true;
+      amb.current.intensity += (m.amb - amb.current.intensity) * k;
+      color.current.set(m.fill);
+      amb.current.color.lerp(color.current, k);
+    }
     gl.toneMappingExposure += (m.exposure - gl.toneMappingExposure) * k;
-    if (moving) invalidate();
+    if (moving) {
+      bumpShadows(2);
+      invalidate();
+    }
   });
 
   return (
@@ -79,8 +91,9 @@ export function Lighting({ mood, shadows, shadowMapSize = 2048, span = 6 }: { mo
         <Lightformer form="rect" intensity={4} color="#ffffff" position={[0, 3.2, 6]} rotation={[-Math.PI / 4, 0, 0]} scale={[6, 0.15, 1]} />
       </Environment>
       {/* sky from above, warm light bouncing off the floor from below */}
-      <hemisphereLight ref={hemi} args={[m.fill, "#7a6650", wide ? m.hemi * 1.7 : m.hemi]} />
-      {wide && <ambientLight intensity={m.night ? 0.02 : 0.12} color={m.fill} />}
+      <hemisphereLight ref={hemi} args={[m.fill, "#8d8780", wide ? m.hemi * 1.7 : m.hemi]} />
+      {/* light bounced around the rooms: without it, fronts facing away from a window go far too dark */}
+      {wide && <ambientLight ref={amb} intensity={m.amb} color={m.fill} />}
       <directionalLight
         ref={sun}
         position={sunPos}

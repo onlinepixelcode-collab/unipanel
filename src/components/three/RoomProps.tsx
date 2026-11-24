@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { memo, Suspense, useEffect, useMemo } from "react";
 import { useGLTF } from "@react-three/drei";
 import { asset } from "@/lib/asset";
+import { bumpShadows } from "./shadowState";
 import type { Prop } from "@/lib/studio/layout";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { getStagingMaterial } from "./materials";
@@ -34,6 +35,9 @@ const M = {
   rice: () => getStagingMaterial("p-rice", "#f4f0e6", { roughness: 0.95 }),
   fabric: (c: string) => getStagingMaterial("p-fabric", c, { roughness: 0.96, sheen: 0.6, sheenRoughness: 0.8, sheenColor: new THREE.Color("#ffffff") }),
   travertine: () => getStagingMaterial("p-travertine", "#d8cbb5", { roughness: 0.55, clearcoat: 0.25 }),
+  tile: () => getStagingMaterial("p-tile", "#dedbd4", { roughness: 0.3, clearcoat: 0.35, clearcoatRoughness: 0.2 }),
+  tray: () => getStagingMaterial("p-tray", "#57554f", { roughness: 0.55 }),
+  showerGlass: () => getStagingMaterial("p-shower-glass", "#dfe9e6", { roughness: 0.03, transparent: true, opacity: 0.16, clearcoat: 1, depthWrite: false, side: THREE.DoubleSide }),
   globe: () => getStagingMaterial("p-globe", "#f4f1ea", { roughness: 0.05, transparent: true, opacity: 0.32, clearcoat: 1, depthWrite: false, emissive: new THREE.Color("#ffe2b8"), emissiveIntensity: 0.25 }),
   bulb: () => getStagingMaterial("p-bulb", "#fff3dc", { emissive: new THREE.Color("#ffd8a0"), emissiveIntensity: 6, roughness: 1 }),
   shade: () => getStagingMaterial("p-shade", "#f3ece0", { roughness: 0.9, side: THREE.DoubleSide, emissive: new THREE.Color("#ffd9a8"), emissiveIntensity: 0.35 }),
@@ -115,13 +119,17 @@ function RealModel({ id, height, rotY = 0 }: { id: string; height: number; rotY?
     });
     return c;
   }, [scene, height]);
+  useEffect(() => bumpShadows(20), [obj]);
   return (
     <group rotation={[0, rotY, 0]}>
       <primitive object={obj} />
     </group>
   );
 }
+/** On phones and low-power devices the coded stand-ins are used instead of downloading the models. */
+let useRealModels = true;
 function Real({ id, height, rotY, children }: { id: string; height: number; rotY?: number; children: React.ReactNode }) {
+  if (!useRealModels) return <>{children}</>;
   return (
     <Suspense fallback={children}>
       <RealModel id={id} height={height} rotY={rotY} />
@@ -180,6 +188,8 @@ const G = {
   stem: new THREE.CylinderGeometry(0.002, 0.003, 1, 5),
   glass: lathe([[0.001, 0], [0.032, 0], [0.034, 0.1], [0.031, 0.1], [0.029, 0.006], [0.001, 0.006]], 28),
   torus: new THREE.TorusGeometry(0.17, 0.008, 8, 40),
+  // freestanding bathtub shell (unit radius; scaled to an oval): outer wall, rolled rim, inner bowl
+  tub: lathe([[0.001, 0], [0.8, 0], [0.9, 0.05], [0.99, 0.5], [1.0, 0.56], [0.97, 0.575], [0.93, 0.55], [0.85, 0.14], [0.7, 0.09], [0.001, 0.09]], 56),
   board: (() => {
     // a paddle-shaped chopping board, 18mm thick, with rounded corners and a handle
     const sh = new THREE.Shape();
@@ -593,10 +603,12 @@ function Item({ p }: { p: Prop }) {
     case "pendant":
       // hangs from the ceiling: a real globe pendant (Poly Haven), its globe at about 1.75m
       return (
-        <group position={[0, -1.25, 0]}>
-          <Real id="modern_ceiling_lamp_01" height={1.25}>
-            <mesh geometry={G.sphere} material={M.shade()} scale={0.2} position={[0, 0.2, 0]} />
+        <group position={[0, -1.2, 0]}>
+          <Real id="modern_ceiling_lamp_01" height={0.76}>
+            <mesh geometry={G.sphere} material={M.shade()} scale={0.17} position={[0, 0.17, 0]} />
           </Real>
+          {/* a longer cord, so a smaller globe still hangs at the right height over the island */}
+          <Cyl r={0.004} h={0.45} p={[0, 0.76 + 0.22, 0]} m={M.black()} />
         </group>
       );
     case "globeCluster": {
@@ -618,6 +630,63 @@ function Item({ p }: { p: Prop }) {
         </>
       );
     }
+    case "bathtub":
+      // a freestanding oval tub (1.7 × 0.8m) with a floor-standing black filler at its head
+      return (
+        <>
+          <mesh geometry={G.tub} material={M.ceramic()} scale={[0.85, 1, 0.4]} castShadow receiveShadow />
+          <Cyl r={0.03} h={0.004} p={[0.25, 0.094, 0]} m={M.steel()} />
+          <Cyl r={0.045} h={0.012} p={[1.0, 0.006, 0]} m={M.black()} />
+          <Cyl r={0.016} h={0.92} p={[1.0, 0.46, 0]} m={M.black()} />
+          <Cyl r={0.014} h={0.24} p={[0.89, 0.92, 0]} rot={[0, 0, Math.PI / 2]} m={M.black()} />
+          <Cyl r={0.014} h={0.05} p={[0.78, 0.9, 0]} m={M.black()} />
+          <Cyl r={0.01} h={0.07} p={[1.0, 0.8, 0.04]} rot={[Math.PI / 2, 0, 0]} m={M.black()} />
+        </>
+      );
+    case "shower": {
+      // a walk-in shower in a corner (origin at the corner; extends -x and -z): stone tray, tiled walls,
+      // a fixed glass screen, a rain head on a wall arm, mixer and hand shower in black
+      const W = 1.1, D = 1.15, Hh = 2.1;
+      return (
+        <>
+          <Box s={[W, 0.016, D]} p={[-W / 2, 0.008, -D / 2]} m={M.tray()} />
+          <Box s={[0.012, 2.4, D + 0.3]} p={[-0.006, 1.2, -(D + 0.3) / 2]} m={M.tile()} />
+          <Box s={[W + 0.3, 2.4, 0.012]} p={[-(W + 0.3) / 2, 1.2, -0.006]} m={M.tile()} />
+          <Box s={[0.7, 0.004, 0.06]} p={[-W / 2, 0.018, -0.12]} m={M.steel()} />
+          <mesh position={[-W, Hh / 2 + 0.016, -D / 2]} material={M.showerGlass()} userData={{ noRoomEnv: true, noPath: true }}>
+            <boxGeometry args={[0.01, Hh, D]} />
+          </mesh>
+          <Box s={[0.02, 0.02, D]} p={[-W, 0.026, -D / 2]} m={M.black()} />
+          <Box s={[0.02, Hh, 0.02]} p={[-W, Hh / 2 + 0.016, -0.01]} m={M.black()} />
+          <Box s={[W, 0.014, 0.014]} p={[-W / 2, Hh + 0.01, -D + 0.02]} m={M.black()} />
+          <Cyl r={0.012} h={0.5} p={[-0.25, 2.2, -D / 2]} rot={[0, 0, Math.PI / 2]} m={M.black()} />
+          <Cyl r={0.15} h={0.012} p={[-0.5, 2.17, -D / 2]} m={M.black()} />
+          <Cyl r={0.012} h={0.04} p={[-0.5, 2.19, -D / 2]} m={M.black()} />
+          <Cyl r={0.06} h={0.012} p={[-0.012, 1.15, -D / 2]} rot={[0, 0, Math.PI / 2]} m={M.black()} />
+          <Cyl r={0.009} h={0.07} p={[-0.05, 1.15, -D / 2]} rot={[0, 0, Math.PI / 2]} m={M.black()} />
+          <Cyl r={0.008} h={0.7} p={[-0.03, 1.4, -D / 2 - 0.3]} m={M.black()} />
+          <Cyl r={0.02} h={0.16} p={[-0.06, 1.62, -D / 2 - 0.3]} rot={[0, 0, 0.5]} m={M.black()} />
+          <Box s={[0.4, 0.02, 0.12]} p={[-0.55, 1.1, -0.07]} m={M.tray()} />
+          {[
+            [-0.66, 0.2, "#2c3b2a"],
+            [-0.56, 0.15, "#e8e3d8"],
+            [-0.47, 0.11, "#6b4b33"],
+          ].map(([x, h, c], i) => (
+            <Cyl key={i} r={0.026} h={h as number} p={[x as number, 1.11 + (h as number) / 2, -0.07]} m={M.paper(c as string)} />
+          ))}
+        </>
+      );
+    }
+    case "toilet":
+      // wall-hung: boxed-in cistern with a flush plate, floating bowl and soft-close lid
+      return (
+        <>
+          <Box s={[0.5, 1.15, 0.02]} p={[0, 0.575, 0.01]} m={M.tile()} />
+          <Box s={[0.24, 0.16, 0.012]} p={[0, 1.0, 0.026]} m={M.steel()} />
+          <mesh geometry={softGeo(0.37, 0.3, 0.52, 0.12)} material={M.ceramic()} position={[0, 0.33, 0.28]} castShadow receiveShadow />
+          <mesh geometry={softGeo(0.37, 0.035, 0.44, 0.016)} material={M.ceramic()} position={[0, 0.5, 0.31]} castShadow />
+        </>
+      );
     case "stool":
       return (
         <>
@@ -634,7 +703,8 @@ function Item({ p }: { p: Prop }) {
   }
 }
 
-export const RoomProps = memo(function RoomProps({ props }: { props: Prop[] }) {
+export const RoomProps = memo(function RoomProps({ props, real = true }: { props: Prop[]; real?: boolean }) {
+  useRealModels = real;
   return (
     <group>
       {props.map((p, i) => (

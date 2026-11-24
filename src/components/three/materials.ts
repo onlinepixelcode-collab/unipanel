@@ -167,6 +167,7 @@ export function getStagingMaterial(kind: string, color: string, extra: Partial<T
   const hit = stagingCache.get(key);
   if (hit) return hit;
   const m = new THREE.MeshPhysicalMaterial({ color, roughness: 0.6, ...extra });
+  m.name = kind;
   stagingCache.set(key, m);
   return m;
 }

@@ -26,6 +26,8 @@ export interface DoorLeaf {
   w: number;
   /** swing direction: +1 or -1 about the hinge */
   swing: number;
+  /** inside doors open as you approach; the front door stays shut */
+  auto: boolean;
 }
 export interface WindowPane {
   x: number;
@@ -125,7 +127,7 @@ export function homePlan(room: RoomSpec): HomePlan | null {
         windows.push(wl.axis === "x" ? { x: c, z: mid, axis: "x", w, y0: (o.sill ?? 900) * MM, y1: (o.top ?? 2200) * MM } : { x: mid, z: c, axis: "z", w, y0: (o.sill ?? 900) * MM, y1: (o.top ?? 2200) * MM });
         continue;
       }
-      if (o.kind === "door") leaves.push(wl.axis === "x" ? { hx: c - w / 2, hz: mid, axis: "x", w, swing: o.swing ?? 1 } : { hx: mid, hz: c - w / 2, axis: "z", w, swing: o.swing ?? 1 });
+      if (o.kind === "door") leaves.push(wl.axis === "x" ? { hx: c - w / 2, hz: mid, axis: "x", w, swing: o.swing ?? 1, auto: !wl.outer } : { hx: mid, hz: c - w / 2, axis: "z", w, swing: o.swing ?? 1, auto: !wl.outer });
       // which regions does this opening join?
       const [px, pz] = wl.axis === "x" ? [c, mid] : [mid, c];
       const [nx, nz] = wl.axis === "x" ? [0, 1] : [1, 0];
@@ -184,6 +186,8 @@ export function route(plan: HomePlan, from: [number, number], to: [number, numbe
 export function obstacles(plan: HomePlan, room: RoomSpec): Rect[] {
   const out: Rect[] = [];
   for (const w of plan.walls) if (w.y0 < 1.2) out.push({ x0: w.x0, x1: w.x1, z0: w.z0, z1: w.z1 });
+  // the closed front door
+  for (const l of plan.leaves) if (!l.auto) out.push(l.axis === "x" ? { x0: l.hx, x1: l.hx + l.w, z0: l.hz - WALL / 2, z1: l.hz + WALL / 2 } : { x0: l.hx - WALL / 2, x1: l.hx + WALL / 2, z0: l.hz, z1: l.hz + l.w });
   // glazing is solid too, even where it reaches the floor
   for (const g of plan.windows) out.push(g.axis === "x" ? { x0: g.x - g.w / 2, x1: g.x + g.w / 2, z0: g.z - WALL / 2, z1: g.z + WALL / 2 } : { x0: g.x - WALL / 2, x1: g.x + WALL / 2, z0: g.z - g.w / 2, z1: g.z + g.w / 2 });
   for (const p of room.panels) {
@@ -196,8 +200,14 @@ export function obstacles(plan: HomePlan, room: RoomSpec): Rect[] {
     const hw = ((q ? d : w) / 2) * MM, hd = ((q ? w : d) / 2) * MM;
     out.push({ x0: p.pos[0] * MM - hw, x1: p.pos[0] * MM + hw, z0: p.pos[2] * MM - hd, z1: p.pos[2] * MM + hd });
   }
-  const FOOT: Partial<Record<string, [number, number]>> = { sofa: [2.5, 0.95], bed: [1.9, 2.2], armchair: [0.8, 0.8], coffeeTable: [1.1, 0.6], bench: [1.3, 0.42], console: [1.3, 0.38], stool: [0.36, 0.36], plant: [0.45, 0.45], floorLamp: [0.35, 0.35] };
+  const FOOT: Partial<Record<string, [number, number]>> = { sofa: [2.5, 0.95], bed: [1.9, 2.2], armchair: [0.8, 0.8], coffeeTable: [1.1, 0.6], bench: [1.3, 0.42], console: [1.3, 0.38], stool: [0.36, 0.36], plant: [0.45, 0.45], floorLamp: [0.35, 0.35], bathtub: [1.78, 0.86], toilet: [0.44, 1.12] };
   for (const pr of room.props) {
+    if (pr.kind === "shower") {
+      // the fixed glass screen on the room side of the walk-in shower
+      const x = pr.pos[0] * MM, z = pr.pos[2] * MM;
+      out.push({ x0: x - 1.13, x1: x - 1.07, z0: z - 1.15, z1: z });
+      continue;
+    }
     const f = FOOT[pr.kind];
     if (!f || (pr.kind === "plant" && pr.pos[1] > 100)) continue;
     const span = pr.kind === "sofa" && pr.span ? pr.span * MM : f[0];

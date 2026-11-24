@@ -8,8 +8,8 @@ import { setGoto, walkState } from "./walkState";
 
 const EYE = 1.6;
 const RADIUS = 0.26;
-const WALK = 1.45; // m/s
-const RUN = 2.6;
+const WALK = 2.7; // m/s: a brisk pace, so crossing the house takes a few seconds
+const RUN = 4.6;
 
 /**
  * First-person walking through the home. Drag to look around, click the floor to walk
@@ -163,8 +163,8 @@ export function HomeWalker({ room, onRoomChange }: { room: RoomSpec; onRoomChang
     if (st.keys.size) {
       const f = (st.keys.has("w") ? 1 : 0) - (st.keys.has("s") ? 1 : 0);
       const r = (st.keys.has("d") ? 1 : 0) - (st.keys.has("a") ? 1 : 0);
-      if (st.keys.has("q")) st.yaw += dt * 1.6;
-      if (st.keys.has("e")) st.yaw -= dt * 1.6;
+      if (st.keys.has("q")) st.yaw += dt * 2.2;
+      if (st.keys.has("e")) st.yaw -= dt * 2.2;
       const fx = -Math.sin(st.yaw), fz = -Math.cos(st.yaw);
       const rx = Math.cos(st.yaw), rz = -Math.sin(st.yaw);
       mx = (fx * f + rx * r) * speed * dt;
@@ -185,7 +185,7 @@ export function HomeWalker({ room, onRoomChange }: { room: RoomSpec; onRoomChang
         const want = Math.atan2(-dx, -dz);
         let diff = want - st.yaw;
         diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-        st.yaw += diff * Math.min(1, dt * 3.2);
+        st.yaw += diff * Math.min(1, dt * 5);
         st.pitch += (-0.06 - st.pitch) * Math.min(1, dt * 2);
         moving = true;
         // give up on a waypoint we can't reach (furniture in the way)
@@ -211,7 +211,7 @@ export function HomeWalker({ room, onRoomChange }: { room: RoomSpec; onRoomChang
     if (mx || mz) {
       const [nx, nz] = collide(st.x + mx, st.z + mz, RADIUS, rects);
       const moved = Math.hypot(nx - st.x, nz - st.z);
-      st.bob += moved * 7.5;
+      st.bob += moved * 5.5;
       st.x = nx;
       st.z = nz;
     }

@@ -7,6 +7,7 @@ import { asset } from "@/lib/asset";
 import { startWater, stopWater } from "@/lib/audio/water";
 import { homePlan, WALL, DOOR_H, type DoorLeaf, type WindowPane } from "@/lib/studio/homePlan";
 import { walkState } from "./walkState";
+import { bumpShadows } from "./shadowState";
 import type { Panel, RoomSpec } from "@/lib/studio/layout";
 import type { Scheme, Zone } from "@/lib/studio/scheme";
 import { STAGING } from "@/lib/studio/scheme";
@@ -305,7 +306,10 @@ function Openable({
     const k = 1 - Math.exp(-dt * 7);
     t.current += (target - t.current) * k;
     if (Math.abs(target - t.current) < 0.0008) t.current = target;
-    else invalidate();
+    else {
+      invalidate();
+      bumpShadows(2);
+    }
     const g = inner.current;
     if (!g) return;
     // ease-out with a touch of soft-close at the end of travel
@@ -873,9 +877,10 @@ function Floor({ kind, w, d, cx, cz, shadows, reflect }: { kind: number; w: numb
     invalidate();
     return () => map.dispose();
   }, [map, invalidate]);
-  // polished tile and marble mirror the room; lacquered wood gives a soft, blurred sheen
-  const polished = kind === 3 || kind === 4 || kind === 0 || kind === 5;
-  const wood = kind === 0 || kind === 5;
+  // polished tile and marble mirror the room (a second render of the scene, so stone floors only);
+  // lacquered wood gets its sheen from the room reflection probe instead
+  const polished = kind === 3 || kind === 4;
+  const wood = false;
   const plain = useMemo(
     () =>
       new THREE.MeshPhysicalMaterial({
@@ -899,7 +904,7 @@ function Floor({ kind, w, d, cx, cz, shadows, reflect }: { kind: number; w: numb
           <planeGeometry args={[w, d]} />
           <MeshReflectorMaterial
             map={map}
-            resolution={1024}
+            resolution={w * d > 60 ? 512 : 1024}
             blur={kind === 4 ? [300, 90] : wood ? [700, 260] : [420, 160]}
             mixBlur={1}
             mixStrength={kind === 4 ? 0.42 : wood ? 0.14 : 0.26}
@@ -1021,7 +1026,7 @@ export interface ShellLights {
 /** A door leaf in the house: hangs from its hinge, swings open as the visitor comes near. */
 function HouseDoor({ leaf, scheme }: { leaf: DoorLeaf; scheme: Scheme }) {
   const g = useRef<THREE.Group>(null);
-  const t = useRef(0.35);
+  const t = useRef(leaf.auto ? 0.35 : 0);
   const invalidate = useThree((st) => st.invalidate);
   const mat = getFinishMaterial(scheme.zones.wardrobeDoors, "v", "high");
   const handle = getStagingMaterial("chrome", "#eceeef", { metalness: 1, roughness: 0.1 });
@@ -1030,11 +1035,14 @@ function HouseDoor({ leaf, scheme }: { leaf: DoorLeaf; scheme: Scheme }) {
   const cz = leaf.axis === "z" ? leaf.hz + leaf.w / 2 : leaf.hz;
   useFrame((_, dt) => {
     // open when the visitor is close; in the dollhouse view doors stand open so the plan reads
-    const near = !walkState.active || Math.hypot(walkState.x - cx, walkState.z - cz) < 2.1;
+    const near = leaf.auto && (!walkState.active || Math.hypot(walkState.x - cx, walkState.z - cz) < 2.8);
     const target = near ? 1 : 0;
-    const k = 1 - Math.exp(-dt * 5);
+    const k = 1 - Math.exp(-dt * 8);
     t.current += (target - t.current) * k;
-    if (Math.abs(target - t.current) > 0.002) invalidate();
+    if (Math.abs(target - t.current) > 0.002) {
+      invalidate();
+      bumpShadows(2);
+    }
     if (g.current) g.current.rotation.y = leaf.swing * t.current * 1.6;
   });
   const along = leaf.axis === "x" ? 0 : -Math.PI / 2;
@@ -1072,7 +1080,7 @@ function HouseWindow({ w: win, frameMat }: { w: WindowPane; frameMat: THREE.Mate
   const h = win.y1 - win.y0;
   return (
     <group position={[win.x, (win.y0 + win.y1) / 2, win.z]} rotation={[0, rotY, 0]}>
-      <mesh material={glassMat()} userData={{ noRoomEnv: true }}>
+      <mesh material={glassMat()} userData={{ noRoomEnv: true, noPath: true }}>
         <planeGeometry args={[win.w, h]} />
       </mesh>
       {[

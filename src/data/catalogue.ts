@@ -13,7 +13,8 @@ export const PBR_PRESETS: Record<FinishKind, PBRParams> = {
   gloss: { roughness: 0.06, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.03, sheen: 0, anisotropy: 0, normalScale: 0, envMapIntensity: 1.15, ior: 1.5, specularIntensity: 1 },
   "gloss-metallic": { roughness: 0.32, metalness: 0.55, clearcoat: 1, clearcoatRoughness: 0.04, sheen: 0, anisotropy: 0, normalScale: 0, envMapIntensity: 1.2, ior: 1.5, specularIntensity: 1 },
   metal: { roughness: 0.34, metalness: 0.92, clearcoat: 0, clearcoatRoughness: 0, sheen: 0, anisotropy: 0.85, normalScale: 0.12, envMapIntensity: 1.25, ior: 1.5, specularIntensity: 1 },
-  wood: { roughness: 0.62, metalness: 0, clearcoat: 0.08, clearcoatRoughness: 0.5, sheen: 0, anisotropy: 0, normalScale: 0.35, envMapIntensity: 0.8, ior: 1.45, specularIntensity: 0.5 },
+  // a matt woodgrain board has very little surface sheen: keeping it low stops the grain washing out towards grey
+  wood: { roughness: 0.66, metalness: 0, clearcoat: 0.04, clearcoatRoughness: 0.55, sheen: 0, anisotropy: 0, normalScale: 0.35, envMapIntensity: 0.55, ior: 1.45, specularIntensity: 0.3 },
   "marble-gloss": { roughness: 0.12, metalness: 0, clearcoat: 0.9, clearcoatRoughness: 0.05, sheen: 0, anisotropy: 0, normalScale: 0, envMapIntensity: 1.05, ior: 1.5, specularIntensity: 0.9 },
   "marble-matte": { roughness: 0.72, metalness: 0, clearcoat: 0, clearcoatRoughness: 0, sheen: 0, anisotropy: 0, normalScale: 0, envMapIntensity: 0.75, ior: 1.45, specularIntensity: 0.45 },
   "marble-textured": { roughness: 0.48, metalness: 0, clearcoat: 0.25, clearcoatRoughness: 0.35, sheen: 0, anisotropy: 0, normalScale: 0.35, envMapIntensity: 0.9, ior: 1.5, specularIntensity: 0.6 },

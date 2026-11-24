@@ -34,7 +34,7 @@ export interface Panel {
 export type PropKind =
   | "jars" | "plant" | "kettle" | "pot" | "boards" | "bowl" | "vase" | "books" | "plates" | "glasses" | "stool" | "folded" | "garments" | "soap" | "bottles" | "towel" | "speaker"
   | "sofa" | "armchair" | "rug" | "coffeeTable" | "floorLamp" | "bed" | "lamp" | "bench" | "console" | "art" | "runner" | "diningTable"
-  | "pendant" | "globeCluster";
+  | "pendant" | "globeCluster" | "bathtub" | "shower" | "toilet";
 
 /** Styling items (visual staging only): kitchenware, books, plants. Position is the item's base centre, in mm. */
 export interface Prop {
@@ -804,8 +804,8 @@ function home(s: Scheme): RoomSpec {
   };
   add("bedroom", "Bedroom", build.bedroom, 0, bedW, true);
   add("wardrobe", "Walk-in wardrobe", build.wardrobe, bedW + T, warW, true);
-  add("bathroom", "Bathroom", build.bathroom, bedW + T + warW + T, batW, true, { lx: 0, lz: DEPTH - 1700, yaw: 0 });
-  add("kitchen", "Kitchen", build.kitchen, 0, kitW, false);
+  add("bathroom", "Bathroom", build.bathroom, bedW + T + warW + T, batW, true, { lx: -1200, lz: DEPTH - 500, yaw: -0.85 });
+  add("kitchen", "Kitchen", build.kitchen, 0, kitW, false, { lx: 900, lz: DEPTH - 650, yaw: 0.16 });
   // the lounge's sofa faces the media wall: stand beside it, not behind it
   add("lounge", "Lounge", build.lounge, kitW + T, louW, false, { lx: -1850, lz: DEPTH - 1100, yaw: -0.42 });
   add("foyer", "Entrance", null, kitW + T + louW + T, foyW, false, { lx: 0, lz: DEPTH - 1200, yaw: 0 });
@@ -881,6 +881,12 @@ function home(s: Scheme): RoomSpec {
   ];
   void war;
 
+  // bathroom: a freestanding tub under the window, a walk-in shower in the corner, a wall-hung toilet
+  props.push(
+    { kind: "bathtub", pos: [bat.x1 - 540, 0, 2350], rotY: Math.PI / 2 },
+    { kind: "shower", pos: [bat.x1, 0, DEPTH], rotY: 0 },
+    { kind: "toilet", pos: [bat.x0, 0, 1750], rotY: Math.PI / 2 },
+  );
   // the foyer and hall: console with art, a bench by the door, plants, runners
   props.push(
     { kind: "rug", pos: [mid(foy), 0, sz0 + 2600], rotY: 0, span: 2200 },

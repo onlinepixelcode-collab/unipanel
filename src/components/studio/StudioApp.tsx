@@ -82,23 +82,27 @@ export default function StudioApp() {
   const [override, setOverride] = useState<import("@/lib/studio/scheme").Scheme | null>(null);
   const [otherImg, setOtherImg] = useState<string | null>(null);
   const [roomToast, setRoomToast] = useState<{ name: string; n: number } | null>(null);
-  // photo mode: path-traced stills
+  // photo: a high-resolution still of the current view, rendered with every light on
   const [photo, setPhoto] = useState(false);
-  const [photoProg, setPhotoProg] = useState<{ p: number; label: string }>({ p: 0, label: "" });
-  const lastProg = useRef(0);
-  const onPhotoProgress = useCallback((p: number, label: string) => {
-    // update the overlay a few times a second, not every sample
-    const now = performance.now();
-    if (p < 1 && now - lastProg.current < 200) return;
-    lastProg.current = now;
-    setPhotoProg({ p, label });
-  }, []);
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const takePhoto = async () => {
+    if (!canvas.current || photo) return;
+    setPhoto(true);
+    try {
+      // photo quality switches on every window and room light: let shadows and reflections redraw first
+      await new Promise((r) => setTimeout(r, 60));
+      await canvas.current.settle(14);
+      setPhotoUrl(await canvas.current.capture(window.innerWidth < 1024 ? 2 : 3, "image/jpeg"));
+    } catch {
+      flash("The photo could not be rendered. Please try again.");
+    }
+    setPhoto(false);
+  };
   const savePhoto = () => {
-    const url = canvas.current?.snapshot();
-    if (!url) return;
+    if (!photoUrl) return;
     const a = document.createElement("a");
-    a.href = url;
-    a.download = `UnipanelSA-photo-${Date.now().toString(36)}.png`;
+    a.href = photoUrl;
+    a.download = `UnipanelSA-photo-${Date.now().toString(36)}.jpg`;
     a.click();
   };
 
@@ -108,14 +112,14 @@ export default function StudioApp() {
     [st.scheme.scene, st.scheme.layout, st.scheme.buildup, st.scheme.handle, st.scheme.bookmatch], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const plan = useMemo(() => (homeSpec ? homePlan(homeSpec) : null), [homeSpec]);
-  const ROOM_ZONE: Zone[] = ["baseDoors", "cladding", "cladding", "wardrobeDoors", "baseDoors"];
+  const ROOM_ZONE: Record<string, Zone> = { Kitchen: "baseDoors", Lounge: "cladding", Bedroom: "cladding", "Walk-in wardrobe": "wardrobeDoors", Bathroom: "baseDoors", Entrance: "splashback" };
   const onRoomChange = useCallback(
     (i: number) => {
       const s0 = useStudio.getState();
       s0.setCurrentRoom(i);
       const name = i < 0 ? "Hallway" : plan?.rooms[i]?.name ?? "";
       setRoomToast((t) => ({ name, n: (t?.n ?? 0) + 1 }));
-      if (i >= 0 && ROOM_ZONE[i]) s0.select(ROOM_ZONE[i]);
+      if (i >= 0 && ROOM_ZONE[name]) s0.select(ROOM_ZONE[name]);
     },
     [plan], // eslint-disable-line react-hooks/exhaustive-deps
   );
@@ -260,17 +264,6 @@ export default function StudioApp() {
   const whatsapp = () => {
     const text = `My UnipanelSA surface scheme: ${shareUrl()}`;
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener");
-  };
-
-  const exportPng = async () => {
-    if (!canvas.current) return;
-    setBusy("png");
-    const url = await canvas.current.capture(2);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `UnipanelSA-render-${Date.now().toString(36)}.png`;
-    a.click();
-    setBusy(null);
   };
 
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -536,8 +529,8 @@ export default function StudioApp() {
       <button onClick={whatsapp} className="btn btn-line justify-center !min-h-11 !px-3 !text-[14px] text-porcelain">
         <span>Share on WhatsApp</span>
       </button>
-      <button onClick={exportPng} disabled={!!busy} className="btn btn-line justify-center !min-h-11 !px-3 !text-[14px] text-porcelain">
-        <span>{busy === "png" ? "Rendering…" : "Save PNG render"}</span>
+      <button onClick={takePhoto} disabled={!!busy || photo} className="btn btn-line justify-center !min-h-11 !px-3 !text-[14px] text-porcelain">
+        <span>{photo ? "Rendering…" : "High-res photo"}</span>
       </button>
       <button onClick={() => setSheetOpen(true)} disabled={!!busy} className="btn btn-light col-span-2 justify-center !min-h-11 !px-3 !text-[14px]">
         {busy === "pdf" ? "Preparing PDF…" : "Client spec sheet (branded PDF)"}
@@ -717,15 +710,7 @@ export default function StudioApp() {
       <IconBtn on={st.comparing} onClick={toggleCompare} label={st.comparing ? "Exit compare" : "Compare design A and B"} text="Compare">
         {icon.split}
       </IconBtn>
-      <IconBtn
-        on={photo}
-        onClick={() => {
-          setPhotoProg({ p: 0, label: "Preparing…" });
-          setPhoto(!photo);
-        }}
-        label={photo ? "Leave photo mode" : "Render a photoreal photo of this view"}
-        text="Render photo"
-      >
+      <IconBtn on={photo} onClick={takePhoto} label="Take a high-resolution photo of this view" text={photo ? "Rendering…" : "Photo"}>
         {icon.camera}
       </IconBtn>
     </div>
@@ -1014,7 +999,6 @@ export default function StudioApp() {
           onRoom={goRoom}
           onRoomChange={onRoomChange}
           photo={photo}
-          onPhotoProgress={onPhotoProgress}
           tier={tier}
           selected={selected}
           hovered={st.hovered}
@@ -1070,23 +1054,10 @@ export default function StudioApp() {
       )}
 
       {photo && (
-        <div className="absolute inset-x-0 top-20 z-20 flex justify-center px-4">
-          <div className="glass flex w-[min(460px,100%)] items-center gap-4 rounded-2xl px-4 py-3">
-            <div className="min-w-0 flex-1">
-              <p className="text-[13px] text-porcelain">
-                {photoProg.label || "Rendering photo"} {photoProg.p > 0.05 && photoProg.p < 1 ? `· ${Math.round(photoProg.p * 100)}%` : ""}
-              </p>
-              <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/15">
-                <div className="h-full bg-champagne transition-[width] duration-300" style={{ width: `${Math.max(3, photoProg.p * 100)}%` }} />
-              </div>
-              <p className="mt-1.5 text-[12px] text-stone-light">Hold still: real light is traced sample by sample. Moving starts it again.</p>
-            </div>
-            <button onClick={savePhoto} disabled={photoProg.p < 0.15} className="h-10 rounded-full bg-champagne px-4 text-[13px] font-medium text-ink disabled:opacity-40">
-              Save photo
-            </button>
-            <button onClick={() => setPhoto(false)} className="h-10 rounded-full px-3 text-[13px] text-porcelain/85 ring-1 ring-white/20">
-              Done
-            </button>
+        <div className="pointer-events-none absolute inset-x-0 top-20 z-20 flex justify-center px-4">
+          <div className="glass flex items-center gap-3 rounded-full px-5 py-2.5 text-[13px] text-porcelain">
+            <span className="h-3 w-3 animate-spin rounded-full border-2 border-champagne border-t-transparent" />
+            Rendering your photo at full quality…
           </div>
         </div>
       )}
@@ -1116,6 +1087,30 @@ export default function StudioApp() {
 
   const sheetModal = sheetOpen && createPortal(<SheetForm busy={busy === "pdf"} msg={sheetMsg} onClose={() => !busy && setSheetOpen(false)} onSubmit={makeSheet} />, document.body);
 
+  const photoModal =
+    photoUrl &&
+    createPortal(
+      <div className="fixed inset-0 z-[95] flex flex-col bg-black/92 p-4 sm:p-8" role="dialog" aria-modal="true" aria-label="Your photo">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-4 text-porcelain">
+          <div>
+            <p className="eyebrow text-champagne">Your photo</p>
+            <p className="mt-1 text-[13px] text-stone-light">High resolution, every light on. Ready to save or share.</p>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={savePhoto} className="btn btn-light !min-h-10 !px-4 !text-[14px]">
+              Save photo
+            </button>
+            <button onClick={() => setPhotoUrl(null)} className="btn btn-line !min-h-10 !px-4 !text-[14px] text-porcelain">
+              <span>Close</span>
+            </button>
+          </div>
+        </div>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={photoUrl} alt="High-resolution render of your design" className="min-h-0 flex-1 rounded-lg object-contain" />
+      </div>,
+      document.body,
+    );
+
   const toastEl = toast && (
     <div role="status" className="glass fixed left-1/2 top-[calc(var(--nav-h)+12px)] z-50 -translate-x-1/2 rounded-full px-5 py-2.5 text-[14px] text-porcelain shadow-xl">
       {toast}
@@ -1129,6 +1124,7 @@ export default function StudioApp() {
         {live}
         {toastEl}
         {sheetModal}
+        {photoModal}
         <div className="relative h-[46dvh] shrink-0 overflow-hidden">
           {stage}
           <div className="absolute inset-x-3 top-3 z-10 flex items-start justify-between gap-2">
@@ -1187,6 +1183,7 @@ export default function StudioApp() {
       {live}
       {toastEl}
       {sheetModal}
+      {photoModal}
       {/* the render, framed */}
       <div className="relative min-w-0 flex-1 overflow-hidden rounded-[22px] ring-1 ring-white/8">
         {stage}

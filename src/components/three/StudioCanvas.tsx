@@ -1,7 +1,7 @@
 "use client";
 import * as THREE from "three";
 import { Suspense, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
-import { Canvas, useLoader, useThree } from "@react-three/fiber";
+import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
 import { HDRLoader } from "three/examples/jsm/loaders/HDRLoader.js";
 import { asset } from "@/lib/asset";
 import { CameraControls, ContactShadows, PerformanceMonitor, SoftShadows } from "@react-three/drei";
@@ -13,15 +13,16 @@ import { RoomMeshes, RoomShell } from "./RoomMeshes";
 import { RoomProps } from "./RoomProps";
 import { RoomLights, WindowLights } from "./RoomLights";
 import { HomeWalker } from "./HomeWalker";
-import { PhotoRender } from "./PhotoRender";
+import { bumpShadows, takeShadowFrame } from "./shadowState";
 import { Lighting, MOODS } from "./Lighting";
 import { configureMaterials, disposeMaterials } from "./materials";
 import type { Tier } from "./quality";
 
 export interface StudioHandle {
-  capture: (scale?: number) => Promise<string>;
-  /** the canvas exactly as it is now (used to save a finished photo) */
-  snapshot: () => string;
+  /** render the current view at `scale` times the screen resolution and return it as an image */
+  capture: (scale?: number, type?: "image/png" | "image/jpeg") => Promise<string>;
+  /** wait for this many freshly rendered frames (e.g. after switching lighting quality) */
+  settle: (frames?: number) => Promise<void>;
   exportGroup: () => THREE.Object3D | null;
 }
 
@@ -50,9 +51,8 @@ interface Props {
   onToggle?: (id: string) => void;
   /** Walking the home: the room the visitor is in (-1 = hallway). */
   onRoomChange?: (i: number) => void;
-  /** Photo mode: path-traced stills; progress 0..1 is reported back. */
+  /** Photo quality: every window and room light on, finest contact shadows. Used while a photo is taken. */
   photo?: boolean;
-  onPhotoProgress?: (p: number, label: string) => void;
 }
 
 const MM = 0.001;
@@ -163,22 +163,30 @@ function Rig({ room, preset, nonce, compact, lock, autoRotate, homeRoom = 0 }: {
 }
 
 function Bridge({ handle, group }: { handle?: Ref<StudioHandle>; group: React.RefObject<THREE.Group | null> }) {
-  const { gl, setDpr, invalidate, viewport, scene, camera, controls } = useThree();
-  if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") (window as unknown as { __studio?: unknown }).__studio = { scene, gl, invalidate, camera, controls };
+  const { gl, setDpr, invalidate, viewport, scene, camera, controls, size, raycaster } = useThree();
+  if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") (window as unknown as { __studio?: unknown }).__studio = { scene, gl, invalidate, camera, controls, raycaster };
   useImperativeHandle(handle, () => ({
-    capture: async (scale = 2) => {
+    capture: async (scale = 2, type = "image/png") => {
       const prev = viewport.dpr;
-      setDpr(Math.min(3, scale));
-      invalidate();
-      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-      await new Promise((r) => requestAnimationFrame(r));
-      const url = gl.domElement.toDataURL("image/png");
+      // never ask the GPU for more than a 4K-wide frame
+      setDpr(Math.max(1, Math.min(3, scale, 4096 / Math.max(size.width, size.height))));
+      // a few frames at the new size, so shadows, reflections and effects have all redrawn
+      for (let i = 0; i < 5; i++) {
+        invalidate();
+        await new Promise((r) => requestAnimationFrame(r));
+      }
+      const url = gl.domElement.toDataURL(type, 0.93);
       setDpr(prev);
       invalidate();
       return url;
     },
+    settle: async (frames = 8) => {
+      for (let i = 0; i < frames; i++) {
+        invalidate();
+        await new Promise((r) => requestAnimationFrame(r));
+      }
+    },
     exportGroup: () => group.current,
-    snapshot: () => gl.domElement.toDataURL("image/png"),
   }));
   return null;
 }
@@ -197,55 +205,111 @@ function Kick({ deps }: { deps: unknown[] }) {
   return null;
 }
 
+const EMPTY_SCENE = new THREE.Scene();
+
 /**
  * Live room reflections: a cube camera at the middle of the room renders the actual
- * scene (including a front wall only it can see) whenever the design, light or doors
- * change, and glossy surfaces reflect that instead of a generic studio. Re-rendered
- * on change only, so it costs nothing while orbiting.
+ * scene (including a front wall only it can see), and glossy surfaces reflect that
+ * instead of a generic studio. To stay smooth it draws one of the six directions per
+ * frame into a spare cube map and then swaps it in, so changing a finish or walking
+ * into another room never causes a hitch.
  */
 function RoomReflections({ room, homeRoom = 0, deps, size }: { room: RoomSpec; homeRoom?: number; deps: unknown[]; size: number }) {
   const { gl, scene, invalidate } = useThree();
-  const rt = useMemo(() => new THREE.WebGLCubeRenderTarget(size, { type: THREE.HalfFloatType, generateMipmaps: false }), [size]);
-  const cam = useMemo(() => {
-    const c = new THREE.CubeCamera(0.05, 40, rt);
-    c.children.forEach((ch) => ch.layers.enable(1));
-    return c;
-  }, [rt]);
-  useEffect(() => () => rt.dispose(), [rt]);
+  const rts = useMemo(() => [0, 1].map(() => new THREE.WebGLCubeRenderTarget(size, { type: THREE.HalfFloatType, generateMipmaps: false })), [size]);
+  const cams = useMemo(
+    () =>
+      rts.map((rt) => {
+        const c = new THREE.CubeCamera(0.05, 40, rt);
+        c.children.forEach((ch) => ch.layers.enable(1));
+        return c;
+      }),
+    [rts],
+  );
+  useEffect(() => () => rts.forEach((rt) => rt.dispose()), [rts]);
+  const st = useRef({ active: -1, face: -1, pending: false, primed: [false, false] });
   useEffect(() => {
-    const D = room.bounds.depth * MM;
-    if (room.rooms) {
-      const r = room.rooms[Math.max(0, Math.min(homeRoom, room.rooms.length - 1))];
-      cam.position.set(((r.x0 + r.x1) / 2) * MM, 1.35, ((r.z0 + r.z1) / 2) * MM);
-    } else cam.position.set(room.focus[0] * MM, 1.35, Math.min(D * 0.55, 2.6));
-    const capture = () => {
-      // glossy materials that already use the probe must not read it while it is written
-      const glossy: THREE.MeshStandardMaterial[] = [];
+    st.current = { active: -1, face: -1, pending: false, primed: [false, false] };
+  }, [rts]);
+  useEffect(() => {
+    const req = () => {
+      st.current.pending = true;
+      invalidate();
+    };
+    // once quickly, then again after textures and light fades have settled
+    const ts = [250, 1800].map((d) => setTimeout(req, d));
+    return () => ts.forEach(clearTimeout);
+  }, [room, homeRoom, invalidate, ...deps]); // eslint-disable-line react-hooks/exhaustive-deps
+  useFrame(() => {
+    const s = st.current;
+    const target = s.active === 0 ? 1 : 0;
+    const cam = cams[target], rt = rts[target];
+    if (s.face < 0) {
+      if (!s.pending) return;
+      s.pending = false;
+      s.face = 0;
+      const D = room.bounds.depth * MM;
+      if (room.rooms) {
+        const r = room.rooms[Math.max(0, Math.min(homeRoom, room.rooms.length - 1))];
+        cam.position.set(((r.x0 + r.x1) / 2) * MM, 1.35, ((r.z0 + r.z1) / 2) * MM);
+      } else cam.position.set(room.focus[0] * MM, 1.35, Math.min(D * 0.55, 2.6));
+      if (!s.primed[target]) {
+        // let three orient the six cameras for this renderer (an empty scene, so it costs nothing)
+        cam.update(gl, EMPTY_SCENE);
+        s.primed[target] = true;
+      }
+      cam.updateMatrixWorld(true);
+    }
+    const prev = gl.getRenderTarget();
+    const xr = gl.xr.enabled;
+    gl.xr.enabled = false;
+    gl.setRenderTarget(rt, s.face);
+    gl.render(scene, cam.children[s.face] as THREE.Camera);
+    gl.setRenderTarget(prev);
+    gl.xr.enabled = xr;
+    s.face++;
+    if (s.face === 6) {
+      s.face = -1;
+      rt.texture.needsPMREMUpdate = true;
+      s.active = target;
+      // glossy surfaces now reflect the fresh capture (the other cube map is free to be redrawn)
       scene.traverse((o) => {
         const m = o as THREE.Mesh;
         if (!m.isMesh || m.userData.noRoomEnv) return;
-        const mats = Array.isArray(m.material) ? m.material : [m.material];
-        for (const mm of mats) {
+        for (const mm of Array.isArray(m.material) ? m.material : [m.material]) {
           const sm = mm as THREE.MeshStandardMaterial;
           if (!sm?.isMeshStandardMaterial || sm.userData.noRoomEnv || sm.roughness > 0.5 || (sm.emissiveIntensity ?? 0) > 0.8) continue;
-          if (sm.envMap === rt.texture) sm.envMap = null;
-          glossy.push(sm);
+          if (sm.envMap !== rt.texture) {
+            const first = !sm.envMap;
+            sm.envMap = rt.texture;
+            sm.envMapIntensity = 1;
+            if (first) sm.needsUpdate = true;
+          }
         }
       });
-      cam.update(gl, scene);
-      for (const sm of glossy) {
-        if (sm.envMap !== rt.texture) {
-          sm.envMap = rt.texture;
-          sm.envMapIntensity = 1;
-          sm.needsUpdate = true;
-        }
-      }
-      invalidate();
+    }
+    invalidate();
+  });
+  return null;
+}
+
+/** Shadows are redrawn only while something that casts them or lights them is changing. */
+function ShadowScheduler({ deps }: { deps: unknown[] }) {
+  const { gl, invalidate } = useThree();
+  useEffect(() => {
+    gl.shadowMap.autoUpdate = false;
+    gl.shadowMap.needsUpdate = true;
+    return () => {
+      gl.shadowMap.autoUpdate = true;
     };
-    // capture once quickly, then again as textures and the light fade settle
-    const ts = [180, 900, 2200].map((d) => setTimeout(capture, d));
-    return () => ts.forEach(clearTimeout);
-  }, [room, homeRoom, cam, gl, scene, invalidate, rt, ...deps]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [gl]);
+  useEffect(() => {
+    bumpShadows(150);
+    invalidate();
+  }, deps); // eslint-disable-line react-hooks/exhaustive-deps
+  useFrame(() => {
+    if (takeShadowFrame()) gl.shadowMap.needsUpdate = true;
+  });
   return null;
 }
 
@@ -296,6 +360,9 @@ export default function StudioCanvas(p: Props) {
   const night = !!MOODS[p.mood].night;
   const lightsOn = !!p.lightsOn;
   const openKey = useMemo(() => JSON.stringify(p.opened ?? {}), [p.opened]);
+  const walking = !!room.rooms && p.camera === "walk";
+  // a whole house is a lot of pixels to light: cap the resolution so walking stays smooth
+  const maxDpr = Math.min(dprCap, room.rooms ? (p.tier === 2 ? 1.5 : 1.25) : 2);
 
   useEffect(() => () => disposeMaterials(), []);
 
@@ -303,8 +370,8 @@ export default function StudioCanvas(p: Props) {
     <Canvas
       shadows={shadows ? (p.tier === 2 ? true : "soft") : false}
       frameloop="demand"
-      dpr={[1, dprCap]}
-      gl={{ alpha: false, antialias: p.tier < 2, preserveDrawingBuffer: true, powerPreference: "high-performance", toneMapping: THREE.AgXToneMapping, outputColorSpace: THREE.SRGBColorSpace }}
+      dpr={[1, maxDpr]}
+      gl={{ alpha: false, antialias: p.tier < 2, preserveDrawingBuffer: true, powerPreference: "high-performance", toneMapping: THREE.NeutralToneMapping, outputColorSpace: THREE.SRGBColorSpace }}
       camera={{ fov: 38, near: 0.05, far: 250, position: [3, 2, 6] }}
       onPointerMissed={() => p.onHover?.(null)}
       style={{ touchAction: "none" }}
@@ -313,17 +380,18 @@ export default function StudioCanvas(p: Props) {
       <color attach="background" args={[MOODS[p.mood].bg]} />
       <fog attach="fog" args={[MOODS[p.mood].bg, room.rooms ? 45 : 9, room.rooms ? 110 : 22]} />
       {/* PCSS: shadows sharp where an object meets a surface, softer as they fall further away */}
-      {p.tier === 2 && <SoftShadows size={22} samples={12} focus={0.45} />}
+      {p.tier === 2 && <SoftShadows size={22} samples={8} focus={0.45} />}
       <ViewLayers />
       <Materials />
       <Kick deps={[room, p.scheme, p.mood, p.tier, lightsOn]} />
-      <RoomLights room={room} on={lightsOn} tier={p.tier} homeRoom={p.homeRoom} />
-      {!p.photo && <WindowLights room={room} mood={p.mood} />}
-      {shadows && <RoomReflections room={room} homeRoom={p.homeRoom} size={p.tier === 2 ? 512 : 192} deps={[p.scheme, p.mood, lightsOn, openKey]} />}
-      <PerformanceMonitor onDecline={() => setDprCap((d) => Math.max(1, d - 0.25))} />
+      <ShadowScheduler deps={[room, p.mood, p.tier, lightsOn, openKey, !!p.photo]} />
+      <RoomLights room={room} on={lightsOn} tier={p.tier} homeRoom={p.homeRoom} walking={walking} all={!!p.photo} />
+      <WindowLights room={room} mood={p.mood} tier={p.tier} homeRoom={p.homeRoom} walking={walking} all={!!p.photo} />
+      {shadows && <RoomReflections room={room} homeRoom={p.homeRoom} size={p.tier === 2 ? 256 : 128} deps={[p.scheme, p.mood, lightsOn, openKey]} />}
+      {!p.photo && <PerformanceMonitor onDecline={() => setDprCap((d) => Math.max(1, d - 0.25))} />}
       <Lighting mood={p.mood} shadows={shadows} shadowMapSize={p.tier === 2 ? (room.rooms ? 4096 : 2048) : room.rooms ? 2048 : 1024} span={room.bounds.width * MM} />
       {/* the garden streams in on its own, without holding up the house */}
-      <Suspense fallback={null}>{room.rooms && p.camera === "walk" && <Skydome center={[0, (room.bounds.depth * MM) / 2]} mood={p.mood} />}</Suspense>
+      <Suspense fallback={null}>{walking && p.tier >= 1 && <Skydome center={[0, (room.bounds.depth * MM) / 2]} mood={p.mood} />}</Suspense>
       <Suspense fallback={null}>
         <group ref={group}>
           <RoomShell
@@ -338,7 +406,7 @@ export default function StudioCanvas(p: Props) {
             reflect={p.tier === 2}
             cutaway={!!room.rooms && p.camera !== "walk"}
           />
-          <RoomProps props={room.props} />
+          <RoomProps props={room.props} real={p.tier >= 1} />
           <RoomMeshes
             room={room}
             scheme={p.scheme}
@@ -363,23 +431,18 @@ export default function StudioCanvas(p: Props) {
         <Rig room={room} preset={p.camera} nonce={p.cameraNonce} compact={!!p.compact} lock={p.lockControls} autoRotate={p.autoRotate} homeRoom={p.homeRoom} />
       )}
       <Bridge handle={p.handle} group={group} />
-      {p.photo && (
-        <Suspense fallback={null}>
-          <PhotoRender envScale={({ gallery: 0.9, morning: 1, golden: 0.7, evening: 0.15, night: 0.03 } as Record<string, number>)[p.mood] ?? 1} onProgress={p.onPhotoProgress} />
-        </Suspense>
-      )}
-      {p.tier === 2 && !p.photo ? (
+      {p.tier === 2 ? (
         <EffectComposer multisampling={0} enableNormalPass={false}>
           {/* contact shadows in corners and under furniture */}
-          <N8AO aoRadius={0.5} distanceFalloff={0.8} intensity={2.6} quality="medium" halfRes />
+          <N8AO aoRadius={0.5} distanceFalloff={0.8} intensity={2.4} quality={p.photo ? "ultra" : "performance"} halfRes={!p.photo} />
           {/* bright windows and lamps bloom a little, as they do through a lens */}
           <Bloom luminanceThreshold={0.88} luminanceSmoothing={0.15} intensity={0.32} mipmapBlur />
-          {/* filmic AgX curve: sunlit walls roll off softly instead of clipping to white */}
-          <ToneMapping mode={ToneMappingMode.AGX} />
+          {/* Khronos PBR Neutral: finishes keep their true colour; only the brightest highlights are compressed */}
+          <ToneMapping mode={ToneMappingMode.NEUTRAL} />
           <SMAA />
           {/* a lens's gentle falloff and fine sensor grain */}
-          <Vignette offset={0.28} darkness={0.42} />
-          <Noise premultiply blendFunction={BlendFunction.SOFT_LIGHT} opacity={0.16} />
+          <Vignette offset={0.3} darkness={0.32} />
+          <Noise premultiply blendFunction={BlendFunction.SOFT_LIGHT} opacity={0.1} />
         </EffectComposer>
       ) : null}
     </Canvas>
