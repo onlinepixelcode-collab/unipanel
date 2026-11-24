@@ -4,6 +4,15 @@ Flagship site, 3D Surface Studio and "Ask Unipanel" concierge. Next.js 15 (App R
 
 Served under the base path `/unipanel` (e.g. `demo.pixelcode.co.za/unipanel`).
 
+**Live demo:** https://onlinepixelcode-collab.github.io/unipanel/ (static build on GitHub Pages: the concierge answers on-device and forms open the showroom email; deploy with `npm run build && npm start` and an `ANTHROPIC_API_KEY` for the full AI concierge).
+
+### Update the demo
+
+```bash
+NEXT_PUBLIC_SITE_URL=https://onlinepixelcode-collab.github.io STATIC_EXPORT=1 npx next build && touch out/.nojekyll
+# then publish the contents of out/ to the gh-pages branch
+```
+
 ## Run
 
 ```bash
